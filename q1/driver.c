@@ -18,7 +18,7 @@ int main()
     }
     createCmdPipe(cmd_input, cmd_pipe, sc_map);
     // executeCommands(cmd_pipe);
-    // printCmdPipe(cmd_pipe);
+    printCmdPipe(cmd_pipe);
     resetCmdPipe(cmd_pipe);
   }
   return 0;

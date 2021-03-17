@@ -18,15 +18,15 @@
 typedef struct __COMMAND_NODE__ command;
 struct __COMMAND_NODE__
 {
-  int argc;                   // num of args
-  char *argv[MAX_NUM_ARGS];   // list of args
-  int par_offset;             // parent offset for || and ||| pipes. = -2 for 2nd command in || or |||. = -3 for 3rd command.
-  bool in_redirect;           // is input redirected (<)
-  char in_file[MAX_ARG_LEN];  // input file in case input redirected
-  bool out_redirect;          // is output redirected (>)
-  bool out_append;            // is output appended (>>)
-  char out_file[MAX_ARG_LEN]; // output file in case of output redirection
-  char *token;                // raw string of the command
+  int argc;                       // num of args
+  char *argv[MAX_NUM_ARGS + 1];   // list of args
+  int par_offset;                 // parent offset for || and ||| pipes. = -2 for 2nd command in || or |||. = -3 for 3rd command.
+  bool in_redirect;               // is input redirected (<)
+  char in_file[MAX_ARG_LEN + 1];  // input file in case input redirected
+  bool out_redirect;              // is output redirected (>)
+  bool out_append;                // is output appended (>>)
+  char out_file[MAX_ARG_LEN + 1]; // output file in case of output redirection
+  char *token;                    // raw string of the command
   command *next;
 };
 

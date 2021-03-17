@@ -62,9 +62,98 @@ void insertCmdInPipe(command_pipe *cmd_pipe, command *cmd)
 
 void parseCmd(command *cmd, char *cmd_input, int par_offset)
 {
-  // TO DO
   cmd->token = cmd_input;
   cmd->par_offset = par_offset;
+
+  int len = strlen(cmd_input);
+  char curr_arg[MAX_ARG_LEN + 1];
+  char prev_arg[MAX_ARG_LEN + 1];
+  int curr_len = 0;
+  int num_args = 0;
+
+  strcpy(curr_arg, "");
+  strcpy(prev_arg, "");
+
+  for (int i = 0; i <= len; i++)
+  {
+    if (i < len)
+    {
+      char c = cmd_input[i];
+
+      if (!isspace(c))
+      { // if the character read is not a space, record it in the arg char array
+        assert(curr_len < MAX_ARG_LEN, "argument length longer than max size allowed");
+        curr_arg[curr_len++] = c;
+        continue;
+      }
+    }
+
+    if (curr_len == 0)
+    { // if the length of arg is 0, continue
+      continue;
+    }
+
+    if (i + 1 < len && isspace(cmd_input[i + 1]))
+    { // if next char is a space as well, continue
+      continue;
+    }
+
+    curr_arg[curr_len] = '\0'; // end string with null character
+    curr_len = 0;              // reset length
+
+    if (strcmp(prev_arg, ">") == 0 || strcmp(prev_arg, ">>") == 0)
+    {
+      // if the previous arg was an output redirection, store the current arg as the output file
+      strcpy(cmd->out_file, curr_arg);
+      strcpy(prev_arg, curr_arg);
+      continue;
+    }
+
+    if (strcmp(prev_arg, "<") == 0)
+    {
+      // if the previous arg was an input redirection, store the current arg as the output file
+      strcpy(cmd->in_file, curr_arg);
+      strcpy(prev_arg, curr_arg);
+      continue;
+    }
+
+    // update previous arg
+    strcpy(prev_arg, curr_arg);
+
+    if (strcmp(curr_arg, ">") == 0)
+    {
+      // string read is an output redirection (no append)
+      cmd->out_redirect = true;
+      cmd->out_append = false;
+      continue;
+    }
+
+    if (strcmp(curr_arg, ">>") == 0)
+    {
+      // string read is an output redirection (append)
+      cmd->out_redirect = true;
+      cmd->out_append = true;
+      continue;
+    }
+
+    if (strcmp(curr_arg, "<") == 0)
+    {
+      // string read is an input redirection
+      cmd->in_redirect = true;
+      continue;
+    }
+
+    assert(num_args < MAX_NUM_ARGS, "number of arguments exceeded maximum limit");
+
+    (cmd->argv)[num_args] = (char *)calloc(curr_len + 1, sizeof(char));
+    assert((cmd->argv)[num_args] != NULL, "calloc error (cmd->argv)[num_args]");
+
+    // store the argument
+    strcpy((cmd->argv)[num_args++], curr_arg);
+  }
+
+  cmd->argc = num_args;
+  (cmd->argv)[num_args] = NULL;
 }
 
 /**
