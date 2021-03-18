@@ -5,10 +5,10 @@
 
 int main()
 {
-  command_pipe *cmd_pipe = initCmdPipe();
   hash_map *sc_map = init_map(19);
   for (;;)
   {
+    command_pipe *cmd_pipe = initCmdPipe();
     size_t in_size = 0;
     printf("shell> ");
     int count = getline(&cmd_input, &in_size, stdin);
@@ -17,9 +17,12 @@ int main()
       continue;
     }
     createCmdPipe(cmd_input, cmd_pipe, sc_map);
-    // executeCommands(cmd_pipe);
-    printCmdPipe(cmd_pipe);
-    resetCmdPipe(cmd_pipe);
+    executeCmdPipe(cmd_pipe);
+    // printCmdPipe(cmd_pipe);
+
+    // VERIFY: do not reset command pipe if it is a background command
+    if (!(cmd_pipe->is_background))
+      resetCmdPipe(cmd_pipe);
   }
   return 0;
 }

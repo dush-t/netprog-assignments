@@ -1,8 +1,8 @@
-#include <stdlib.h>
-#include "./utils.h"
-
 #ifndef HASH_MAP_H
 #define HASH_MAP_H
+
+#include <stdlib.h>
+#include "./utils.h"
 
 typedef struct __HASH_MAP_NODE__ map_node;
 

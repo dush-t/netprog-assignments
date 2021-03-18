@@ -12,7 +12,7 @@ command_pipe *initCmdPipe()
   cmd_pipe->count = 0;
   cmd_pipe->head = NULL;
   cmd_pipe->tail = NULL;
-  cmd_pipe->isBackground = false;
+  cmd_pipe->is_background = false;
   return cmd_pipe;
 }
 
@@ -60,10 +60,18 @@ void insertCmdInPipe(command_pipe *cmd_pipe, command *cmd)
   cmd_pipe->count += 1;
 }
 
-void parseCmd(command *cmd, char *cmd_input, int par_offset)
+/**
+ * @brief Parse the given command input string and fill in fields of command* cmd object
+ * 
+ * @param cmd 
+ * @param cmd_input 
+ * @param par_offset 
+ */
+void parseCmd(command *cmd, char *cmd_input, int par_offset, pipe_count prev_pipe_count)
 {
   cmd->token = cmd_input;
   cmd->par_offset = par_offset;
+  cmd->prev_pipe_count = prev_pipe_count;
 
   int len = strlen(cmd_input);
   char curr_arg[MAX_ARG_LEN + 1];
@@ -229,14 +237,14 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
       assert(len > 0, "command is empty");
       if (temp[len - 2] == '&') // it is a background command
       {
-        cmd_pipe->isBackground = true;
+        cmd_pipe->is_background = true;
         temp[len - 2] = '\0';
       }
 
       if (pipeCount == 1)
       {
         command *cmd = initCmd();
-        parseCmd(cmd, temp, -1);
+        parseCmd(cmd, temp, 0, SINGLE_PIPE);
         insertCmdInPipe(cmd_pipe, cmd);
       }
       else if (pipeCount == 2)
@@ -247,8 +255,8 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
         assert(cmd1_str != NULL && cmd2_str != NULL, "expected 2 comma separated commands");
 
         command *cmd1 = initCmd(), *cmd2 = initCmd();
-        parseCmd(cmd1, cmd1_str, -1);
-        parseCmd(cmd2, cmd2_str, -2);
+        parseCmd(cmd1, cmd1_str, -1, DOUBLE_PIPE);
+        parseCmd(cmd2, cmd2_str, -2, DOUBLE_PIPE);
         insertCmdInPipe(cmd_pipe, cmd1);
         insertCmdInPipe(cmd_pipe, cmd2);
       }
@@ -261,9 +269,9 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
         assert(cmd1_str != NULL && cmd2_str != NULL && cmd3_str != NULL, "expected 3 comma separated commands");
 
         command *cmd1 = initCmd(), *cmd2 = initCmd(), *cmd3 = initCmd();
-        parseCmd(cmd1, cmd1_str, -1);
-        parseCmd(cmd2, cmd2_str, -2);
-        parseCmd(cmd3, cmd3_str, -3);
+        parseCmd(cmd1, cmd1_str, -1, TRIPLE_PIPE);
+        parseCmd(cmd2, cmd2_str, -2, TRIPLE_PIPE);
+        parseCmd(cmd3, cmd3_str, -3, TRIPLE_PIPE);
         insertCmdInPipe(cmd_pipe, cmd1);
         insertCmdInPipe(cmd_pipe, cmd2);
         insertCmdInPipe(cmd_pipe, cmd3);
@@ -297,6 +305,7 @@ void resetCmdPipe(command_pipe *cmd_pipe)
   }
   cmd_pipe->head = NULL;
   cmd_pipe->tail = NULL;
+  free(cmd_pipe);
 }
 
 /**
@@ -308,7 +317,7 @@ void printCmd(command *cmd)
 {
   printf("\n--- BEGIN COMMAND ---\n");
   printf("token: %s\n", cmd->token);
-  printf("in_redirect: %d, out_redirect: %d, out_append: %d, par_offest: %d\n", cmd->in_redirect, cmd->out_redirect, cmd->out_append, cmd->par_offset);
+  printf("in_redirect: %d, out_redirect: %d, out_append: %d, par_offest: %d, pipe_count: %d\n", cmd->in_redirect, cmd->out_redirect, cmd->out_append, cmd->par_offset, cmd->prev_pipe_count);
   printf("in_file: %s\n", cmd->in_file);
   printf("out_file: %s\n", cmd->out_file);
   printf("argc: %d\n", cmd->argc);
@@ -327,11 +336,265 @@ void printCmd(command *cmd)
  */
 void printCmdPipe(command_pipe *cmd_pipe)
 {
-  printf("isBackground? %d\n\n", cmd_pipe->isBackground);
+  printf("is_background? %d\n\n", cmd_pipe->is_background);
   command *head = cmd_pipe->head;
   while (head)
   {
     printCmd(head);
     head = head->next;
+  }
+}
+
+/**
+ * @brief Close all file descriptors except the one in index except_idx
+ * 
+ * @param pipe_fd 
+ * @param n 
+ * @param except_idx 
+ * @param is_read if true, close read FDs else close write FDs
+ */
+void closeAllFdExcept(int pipe_fd[][2], int n, int except_fd, bool is_read)
+{
+  for (int i = 0; i < n; i++)
+  {
+    int fd = pipe_fd[i][is_read ? 0 : 1];
+    if (fd == except_fd)
+      continue;
+    close(pipe_fd[i][is_read ? 0 : 1]);
+  }
+}
+
+void closeAllPipeFd(int pipe_fd[][2], int n)
+{
+  closeAllFdExcept(pipe_fd, n, -1, true);
+  closeAllFdExcept(pipe_fd, n, -1, false);
+}
+
+/**
+ * @brief Execute the commands in the given pipeline
+ * 
+ * @param cmd_pipe 
+ */
+void executeCmdPipe(command_pipe *cmd_pipe)
+{
+  command *curr_cmd = cmd_pipe->head;
+  int count = cmd_pipe->count;
+  bool is_background = cmd_pipe->is_background;
+  pid_t initial_pgrp = tcgetpgrp(STDIN_FILENO);
+
+  int child_pid; // make a child to ensure it is not a group leader
+  if ((child_pid = fork()) == -1)
+  {
+    errExit("fork error");
+  }
+
+  if (child_pid == 0)
+  {
+    // if the child is in background and calls tcsetpgrp(),
+    // SIGTTOU signal is triggered which should be ignored
+    signal(SIGTTOU, SIG_IGN);
+
+    // make child the group leader
+    assert(setpgid(0, 0) == 0, "setpgid() error");
+
+    // make the child process group foreground if it is not background
+    if (!is_background)
+    {
+      assert(tcsetpgrp(STDIN_FILENO, getpgrp()) == 0, "tcsetpgrp() error");
+    }
+
+    int pipe_fd[count - 1][2]; // (count-1) pipe FDs
+    // initialise pipes
+    for (int i = 0; i < count - 1; i++)
+    {
+      assert(pipe(pipe_fd[i]) != -1, "pipe creation error");
+    }
+
+    int i;
+    for (i = 0; i < count; i++, curr_cmd = curr_cmd->next)
+    {
+      pid_t pid;
+      assert((pid = fork()) != -1, "fork error");
+
+      if (pid == 0)
+      {
+        int my_pid = getpid();
+        pid_t read_pipe = pipe_fd[i - 1][0];
+
+        // logic for || and |||
+        // if it is a comma separated command and there is another comma separated command on the right
+        // then read data from the pipe, store it in a buffer and write the data to the pipe of next command
+        // First make sure there is at least one command remaining
+        if (i < count - 1)
+        { // the current command is first in || or first/second in |||
+          if (curr_cmd->par_offset == -1 || (curr_cmd->par_offset == -2 && curr_cmd->prev_pipe_count == TRIPLE_PIPE))
+          {
+            // read data from pipe and store into a buffer
+            char buff[STDOUT_BUF_SIZE];
+            int buff_cnt = 1, buff_idx = 0, read_cnt = 0;
+            char *pipe_data = (char *)calloc(STDOUT_BUF_SIZE, sizeof(char));
+            pipe_data[0] = '\0';
+            while ((read_cnt = read(pipe_fd[i - 1][0], &buff, STDOUT_BUF_SIZE)) != 0)
+            {
+              strcpy(pipe_data + buff_idx, buff);
+              if (read_cnt == STDOUT_BUF_SIZE)
+              {
+                // increase buffer size if all bytes were consumed
+                pipe_data = (char *)realloc(pipe_data, STDOUT_BUF_SIZE * buff_cnt);
+              }
+              buff_idx += read_cnt;
+              buff_cnt++;
+            }
+
+            // create a temp pipe for the current command
+            // this is because the pipe_fd[i-1] data would have been destructed on read
+            // and we cannot write back to it as we would have closed the write fd
+            int temp_fd[2];
+            assert(pipe(temp_fd) != -1, "temp_fd pipe creation error");
+            // write data to the temp pipe
+            assert(write(temp_fd[1], pipe_data, buff_idx) != -1, "temp_fd[1] write error");
+            read_pipe = -1;
+            close(temp_fd[1]);                                                  // close write end to prevent read blocking forever
+            assert(dup2(temp_fd[0], STDIN_FILENO) != -1, "temp_fd dup2 error"); // make stdin read end of pipe
+
+            // write data to the to the next pipe
+            assert(write(pipe_fd[i][1], pipe_data, buff_idx) != -1, "pipe_fd[i][1] write error");
+          }
+        }
+
+        // make stdin read end of pipe for all processes except first one
+        if (i != 0)
+        {
+          closeAllFdExcept(pipe_fd, count - 1, read_pipe, true);
+          if (read_pipe != -1) // will be -1 when the current command is first in || or first/second in |||
+            assert(dup2(read_pipe, STDIN_FILENO) != -1, "dup2 read fd error");
+        }
+        else
+        {
+          closeAllFdExcept(pipe_fd, count - 1, -1, true);
+        }
+
+        // make stdout write end of pipe for all processes except last
+        if (i != count - 1)
+        {
+          int write_fd = pipe_fd[i][1];
+
+          // logic for write pipe in case of || and |||
+          // note that if it is the first command after ||, it should not write to the pipe of next command
+          // instead, it should write to the next to next command
+          // similarly for others
+          if (curr_cmd->par_offset == -1)
+          { // the command is first after || or |||
+            if (curr_cmd->prev_pipe_count == DOUBLE_PIPE)
+            { // command is first after ||
+              if (i != count - 2)
+              { // make sure command is not second last as then output should be to stdout
+                write_fd = pipe_fd[i + 1][1];
+              }
+              else
+              {
+                write_fd = -1;
+              }
+            }
+            else if (curr_cmd->prev_pipe_count == TRIPLE_PIPE)
+            { // command is first after |||
+              if (i != count - 3)
+              { // make sure command is not third last as then output should be to stdout
+                write_fd = pipe_fd[i + 2][1];
+              }
+              else
+              {
+                write_fd = -1;
+              }
+            }
+          }
+          else if (curr_cmd->par_offset == -2)
+          { // the command is second after || or |||
+
+            if (curr_cmd->prev_pipe_count == TRIPLE_PIPE)
+            { // command is second after |||
+              if (i != count - 2)
+              { // make sure command is not second last as then output should be to stdout
+                write_fd = pipe_fd[i + 1][1];
+              }
+              else
+              {
+                write_fd = -1;
+              }
+            }
+          }
+
+          closeAllFdExcept(pipe_fd, count - 1, write_fd, false);
+          if (write_fd != -1)
+            assert(dup2(write_fd, STDOUT_FILENO) != -1, "dup2 write fd error");
+        }
+        else
+        {
+          closeAllFdExcept(pipe_fd, count - 1, -1, false);
+        }
+
+        // output redirection
+        if (curr_cmd->out_redirect)
+        {
+          int flags = O_WRONLY | O_CREAT;
+          if (curr_cmd->out_append)
+            flags |= O_APPEND;
+          else
+            flags |= O_TRUNC;
+
+          int out_file_fd = open(curr_cmd->out_file, flags, 0777);
+          assert(out_file_fd != -1, "output file open error");
+
+          assert(dup2(out_file_fd, STDOUT_FILENO) != -1, "dup2 output file fd error");
+          assert(close(out_file_fd) == 0, "close output file fd error");
+        }
+
+        // input redirection
+        if (curr_cmd->in_redirect)
+        {
+          int in_file_fd = open(curr_cmd->out_file, O_RDONLY, 0777);
+          assert(in_file_fd != -1, "input file open error");
+
+          assert(dup2(in_file_fd, STDIN_FILENO) != -1, "dup2 input file fd error");
+          assert(close(in_file_fd) == 0, "close input file fd error");
+        }
+
+        assert(execvp((curr_cmd->argv)[0], curr_cmd->argv) == 0, "execv error");
+      }
+      else
+      {
+        if (i != count - 1) // close write end to prevent read blocking forever
+          close(pipe_fd[i][1]);
+
+        if (i != 0) // close read end to prevent error
+          close(pipe_fd[i - 1][0]);
+
+        assert(wait(NULL) != -1, "wait error");
+      }
+    }
+
+    // close all pipes
+    closeAllPipeFd(pipe_fd, count - 1);
+
+    // TO DO: give foreground process control back to shell (parent) on exit
+    // if (!is_background)
+    // {
+    //   assert(tcsetpgrp(STDIN_FILENO, initial_pgrp) == 0, "tcsetpgrp(): foreground control back to shell error");
+    // }
+  }
+  else
+  {
+    // ensure the child is group leader
+    assert(setpgid(child_pid, child_pid) == 0, "setpgid() error");
+
+    // make the child process group foreground if it is not background
+    // Note that the same code for setpgid() and tcsetpgrp () is there in the child
+    // to avoid race conditions. We call at both places as we do not know whether child
+    // will run first or the parent.
+    if (!is_background)
+    {
+      assert(tcsetpgrp(STDIN_FILENO, child_pid) == 0, "tcsetpgrp() error");
+      wait(NULL);
+    }
   }
 }
