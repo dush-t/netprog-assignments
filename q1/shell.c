@@ -427,6 +427,8 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
   if (cmd_pipe == NULL)
     return;
 
+  printf("\n=========== pid: %d ===========\n", getpid());
+
   command *curr_cmd = cmd_pipe->head;
   int count = cmd_pipe->count;
   bool is_background = cmd_pipe->is_background;
@@ -467,6 +469,10 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
     {
       pid_t pid;
       assert((pid = fork()) != -1, "fork error");
+
+      pid_t read_fd_to_print = STDIN_FILENO, write_fd = pipe_fd[i][1];
+      if (i != 0)
+        read_fd_to_print = pipe_fd[i - 1][0];
 
       if (pid == 0)
       {
@@ -529,8 +535,6 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
         // make stdout write end of pipe for all processes except last
         if (i != count - 1)
         {
-          int write_fd = pipe_fd[i][1];
-
           // logic for write pipe in case of || and |||
           // note that if it is the first command after ||, it should not write to the pipe of next command
           // instead, it should write to the next to next command
@@ -577,13 +581,17 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
           }
 
           closeAllFdExcept(pipe_fd, count - 1, write_fd, false);
-          if (write_fd != -1)
-            assert(dup2(write_fd, STDOUT_FILENO) != -1, "dup2 write fd error");
         }
         else
         {
+          write_fd = -1;
           closeAllFdExcept(pipe_fd, count - 1, -1, false);
         }
+
+        int write_fd_to_print = write_fd == -1 ? STDOUT_FILENO : write_fd;
+        printf("\n===== pid: %d, executing: %s, read pipe fd: %d, write pipe fd: %d =====\n", getpid(), curr_cmd->argv[0], read_fd_to_print, write_fd_to_print);
+        if (write_fd != -1)
+          assert(dup2(write_fd, STDOUT_FILENO) != -1, "dup2 write fd error");
 
         // output redirection
         if (curr_cmd->out_redirect)
@@ -597,6 +605,8 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
           int out_file_fd = open(curr_cmd->out_file, flags, 0777);
           assert(out_file_fd != -1, "output file open error");
 
+          printf("\n<<<<< Output Redirection found! Initial o/p FD: %d, File FD: %d >>>>>\n", write_fd_to_print, out_file_fd);
+
           assert(dup2(out_file_fd, STDOUT_FILENO) != -1, "dup2 output file fd error");
           assert(close(out_file_fd) == 0, "close output file fd error");
         }
@@ -606,6 +616,8 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
         {
           int in_file_fd = open(curr_cmd->out_file, O_RDONLY, 0777);
           assert(in_file_fd != -1, "input file open error");
+
+          printf("\n<<<<< Input Redirection found! Initial i/p FD: %d, File FD: %d >>>>>\n", read_fd_to_print, in_file_fd);
 
           assert(dup2(in_file_fd, STDIN_FILENO) != -1, "dup2 input file fd error");
           assert(close(in_file_fd) == 0, "close input file fd error");
@@ -638,6 +650,8 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
   }
   else
   {
+    // ensure the child is group leader
+    setpgid(child_pid, child_pid);
 
     // make the child process group foreground if it is not background
     // Note that the same code for setpgid() and tcsetpgrp () is there in the child
@@ -645,8 +659,6 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
     // will run first or the parent.
     if (!is_background)
     {
-      // ensure the child is group leader
-      setpgid(child_pid, child_pid);
       tcsetpgrp(STDIN_FILENO, child_pid);
       assert(wait(NULL) != -1, "wait error");
     }

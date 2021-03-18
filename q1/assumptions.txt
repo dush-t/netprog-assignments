@@ -1,2 +1,0 @@
-* Number of arguments in a command should not exceed 20
-* Each argument string should not exceed 30 in length
