@@ -170,8 +170,10 @@ void parseCmd(command *cmd, char *cmd_input, int par_offset, pipe_count prev_pip
  * @param cmd_input 
  * @param cmd_pipe 
  * @param sc_map 
+ * @return true when it is not a shortcut command
+ * @return false when it is a shortcut command
  */
-void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
+bool createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
 {
   int len = strlen(cmd_input); // length of input
   char buff[3];                // buffer to check where it is a short-cut command
@@ -185,7 +187,6 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
 
   if (strcmp(buff, "sc") == 0) // it is a shortcut command (sc)
   {
-    cmd_pipe = NULL;
     char sc_flag = '\0';
     int sc_flag_idx = 0;
     int i;
@@ -201,25 +202,56 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
 
     int idx = 0;
     i = sc_flag_idx + 2; // index from which the command's index (hash map key) begins
+
+    if (!isdigit(cmd_input[i]))
+    {
+      printf("Short-cut command index not a number.\n");
+      return false;
+    }
     while (cmd_input[i] != ' ')
     {
-      assert(isdigit(cmd_input[i]), "short-cut command index not a number");
+      if (!isdigit(cmd_input[i]))
+      {
+        printf("Short-cut command index not a number.\n");
+        return false;
+      }
       idx = idx * 10 + cmd_input[i] - '0';
       i++;
     }
 
     if (sc_flag == 'i') // command is to be inserted in hash map
     {
+      if (find_in_map(sc_map, idx) != NULL)
+      {
+        printf("\nCommand with index %d already exists, replace (yes/no)? ", idx);
+        char choice[10];
+        scanf("%s", choice);
+        getchar(); // ignore newline that scanf leaves in buffer
+
+        if (strcmp(choice, "yes") == 0)
+          delete_from_map(sc_map, idx);
+        else if (strcmp(choice, "no") == 0 || strcmp(choice, "") == 0)
+          return false;
+        else
+        {
+          printf("\nInvalid choice entered.");
+          return false;
+        }
+      }
       command_pipe *cmd_pipe_2 = initCmdPipe(); // create a second command pipe for the actual command to be inserted in map
       createCmdPipe(cmd_input + i + 1, cmd_pipe_2, sc_map);
       insert_into_map(sc_map, idx, (command_pipe *)cmd_pipe_2);
+      printf("Stored shortcut command.\n");
     }
     else // command is to be deleted in hash map
     {
       command_pipe *temp_pipe = (command_pipe *)find_in_map(sc_map, idx);
       resetCmdPipe(temp_pipe);
       delete_from_map(sc_map, idx);
+      printf("Deleted shortcut command.\n");
     }
+
+    return false;
   }
   else // it is not a shortcut command
   {
@@ -283,6 +315,8 @@ void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
 
       pipeCount = 1;
     }
+
+    return true;
   }
 }
 
@@ -336,6 +370,11 @@ void printCmd(command *cmd)
  */
 void printCmdPipe(command_pipe *cmd_pipe)
 {
+  if (cmd_pipe == NULL)
+  {
+    printf("No command in pipeline.\n");
+    return;
+  }
   printf("is_background? %d\n\n", cmd_pipe->is_background);
   command *head = cmd_pipe->head;
   while (head)
@@ -370,17 +409,27 @@ void closeAllPipeFd(int pipe_fd[][2], int n)
   closeAllFdExcept(pipe_fd, n, -1, false);
 }
 
+void sigIntExecCmdHandler(int sig_num)
+{
+  assert(sig_num == SIGINT, "[sigIntExecCmdHandler] received unexpected signal");
+  printf("\nPlease wait while the command finishes executing.\n");
+  fflush(stdout);
+}
+
 /**
  * @brief Execute the commands in the given pipeline
  * 
  * @param cmd_pipe 
+ * @param initial_pgrp
  */
-void executeCmdPipe(command_pipe *cmd_pipe)
+void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
 {
+  if (cmd_pipe == NULL)
+    return;
+
   command *curr_cmd = cmd_pipe->head;
   int count = cmd_pipe->count;
   bool is_background = cmd_pipe->is_background;
-  pid_t initial_pgrp = tcgetpgrp(STDIN_FILENO);
 
   int child_pid; // make a child to ensure it is not a group leader
   if ((child_pid = fork()) == -1)
@@ -390,6 +439,9 @@ void executeCmdPipe(command_pipe *cmd_pipe)
 
   if (child_pid == 0)
   {
+    // handle SIGINT when a command is running
+    signal(SIGINT, sigIntExecCmdHandler);
+
     // if the child is in background and calls tcsetpgrp(),
     // SIGTTOU signal is triggered which should be ignored
     signal(SIGTTOU, SIG_IGN);
@@ -576,16 +628,16 @@ void executeCmdPipe(command_pipe *cmd_pipe)
     // close all pipes
     closeAllPipeFd(pipe_fd, count - 1);
 
-    // TO DO: give foreground process control back to shell (parent) on exit
-    // if (!is_background)
-    // {
-    //   assert(tcsetpgrp(STDIN_FILENO, initial_pgrp) == 0, "tcsetpgrp(): foreground control back to shell error");
-    // }
+    // give foreground process control back to shell(parent) on exit if (!is_background)
+    if (!is_background)
+    {
+      assert(tcsetpgrp(STDIN_FILENO, initial_pgrp) == 0, "tcsetpgrp(): foreground control back to shell error");
+    }
+
+    _exit(EXIT_SUCCESS);
   }
   else
   {
-    // ensure the child is group leader
-    assert(setpgid(child_pid, child_pid) == 0, "setpgid() error");
 
     // make the child process group foreground if it is not background
     // Note that the same code for setpgid() and tcsetpgrp () is there in the child
@@ -593,8 +645,10 @@ void executeCmdPipe(command_pipe *cmd_pipe)
     // will run first or the parent.
     if (!is_background)
     {
-      assert(tcsetpgrp(STDIN_FILENO, child_pid) == 0, "tcsetpgrp() error");
-      wait(NULL);
+      // ensure the child is group leader
+      setpgid(child_pid, child_pid);
+      tcsetpgrp(STDIN_FILENO, child_pid);
+      assert(wait(NULL) != -1, "wait error");
     }
   }
 }

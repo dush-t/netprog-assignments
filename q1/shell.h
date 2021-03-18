@@ -55,8 +55,6 @@ typedef struct
   bool is_background; // true if the commands are to be run in background
 } command_pipe;
 
-char *cmd_input; // input typed in shell
-
 /* ---- FUNCTIONS ---- */
 
 /**
@@ -67,12 +65,15 @@ char *cmd_input; // input typed in shell
 command_pipe *initCmdPipe();
 
 /**
- * @brief Create the command pipeline
+ * @brief Create command pipeline linked list from the input
  * 
  * @param cmd_input 
  * @param cmd_pipe 
+ * @param sc_map 
+ * @return true when it is not a shortcut command
+ * @return false when it is a shortcut command
  */
-void createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map);
+bool createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map);
 
 /**
  * @brief Utility function to print all commands in pipeline
@@ -92,6 +93,6 @@ void resetCmdPipe(command_pipe *cmd_pipe);
  * @brief Execute the commands in the given pipeline
  * 
  */
-void executeCmdPipe(command_pipe *cmd_pipe);
+void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp);
 
 #endif
