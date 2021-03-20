@@ -10,8 +10,12 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <pthread.h>
-#include "utils.h"
+#include "./utils.h"
 
+// server socket file descriptor
+int sfd;
+
+// struct for argument passed on to thread
 typedef struct
 {
   int sfd;
@@ -30,12 +34,12 @@ int main(int argc, char **argv)
 {
   if (argc != 2)
   {
-    errExit("\nUsage: server.out <SERVER_PORT>\n");
+    errExit("\nUsage: server.out <SERVER_PORT>\n", sfd, -1);
   }
-  assert(atoi(argv[1]) != CLIENT_PORT, "Given port reserved for client. Please enter a different port.");
+  assert(atoi(argv[1]) != CLIENT_PORT, "Given port reserved for client. Please enter a different port.", sfd, -1);
 
   // init server setup
-  int sfd, cfd;
+  int cfd;
   sfd = serverSetup(atoi(argv[1]));
   struct sockaddr_in caddr;
   int clen = sizeof(caddr);
@@ -57,11 +61,11 @@ int main(int argc, char **argv)
   {
     // accept connection
     cfd = accept(sfd, (struct sockaddr *)&caddr, (socklen_t *)&clen);
-    assert(cfd != -1, "error while clustershell_server accepting clustershell_client request.");
+    assert(cfd != -1, "error while clustershell_server accepting clustershell_client request.", sfd, -1);
 
     // create args structure for thread
     arg_struct *args = (arg_struct *)calloc(1, sizeof(arg_struct));
-    assert(args != NULL, "calloc error while creating args object");
+    assert(args != NULL, "calloc error while creating args object", sfd, -1);
     args->cfd = cfd;
     args->sfd = sfd;
     args->caddr = caddr;
@@ -70,7 +74,7 @@ int main(int argc, char **argv)
     args->connection_ports = connection_ports;
 
     // create thread
-    assert(pthread_create(&thread_id, NULL, connectionHandler, (void *)args) == 0, "pthread_create error");
+    assert(pthread_create(&thread_id, NULL, connectionHandler, (void *)args) == 0, "pthread_create error", sfd, -1);
   }
 
   // perform cleanup
@@ -78,6 +82,14 @@ int main(int argc, char **argv)
   resetConfigObj(config); // to prevent memory leak
 }
 
+/**
+ * @brief Return the index of the client corresponding to the IP and register it
+ * 
+ * @param ip 
+ * @param config 
+ * @param active_connections 
+ * @return int 
+ */
 int registerClientConnection(char *ip, parsed_config *config, bool *active_connections)
 {
   for (int i = 0; i < MAX_CLIENTS_ALLOWED; i++)
@@ -92,8 +104,15 @@ int registerClientConnection(char *ip, parsed_config *config, bool *active_conne
   return -1;
 }
 
+/**
+ * @brief Handle each client
+ * 
+ * @param args 
+ * @return void* 
+ */
 void *connectionHandler(void *args)
 {
+  // deconstruct args
   int sfd = ((arg_struct *)args)->sfd, cfd = ((arg_struct *)args)->cfd;
   struct sockaddr_in caddr = ((arg_struct *)args)->caddr;
   char *client_ip = inet_ntoa(caddr.sin_addr);
@@ -103,11 +122,12 @@ void *connectionHandler(void *args)
 
   printf("\n=== Connected with client IP %s ===\n", client_ip);
 
+  // get the machine index corresponding to IP and register the client
   int idx;
   if ((idx = registerClientConnection(client_ip, config, active_connections)) == -1)
   {
     printf("\n=== IP %s not found in config, exiting ===\n", client_ip);
-    _exit(EXIT_FAILURE);
+    pthread_exit(NULL);
   }
 
   // read the port from client on which the client is establishing server
@@ -126,26 +146,24 @@ void *connectionHandler(void *args)
   if (nread == -1)
   {
     close(cfd);
-    errExit("Error while reading port from client.");
+    printf("Error while reading port from client IP: %s. Closing connection.\n", client_ip);
+    pthread_exit(NULL);
   }
   client_port_str[nread] = '\0';
   printf("~ Will be sending commands to machine n%d at %s:%s ~\n", idx + 1, client_ip, client_port_str);
   connection_ports[idx] = atoi(client_port_str);
 
+  // read commands from client
   for (;;)
   {
-    // read command from client
     char buff[MAX_COMMAND_SIZE + 1];
-    // printf("Reading from client\n"); // debug
     int num_read = read(cfd, buff, MAX_COMMAND_SIZE);
-    if (num_read == 0)
+    if (num_read == 0 || num_read == -1)
     {
       // connection has been closed
-      printf("\n=== Client IP %s has closed connection ===\n", client_ip);
-      active_connections[idx] = false;
+      printf("\n=== Error while reading or Client IP %s has closed connection ===\n", client_ip);
       break;
     }
-    assert(num_read != -1, "error while reading from client");
     buff[num_read] = '\0';
 
     printf("\n-> Command received from client %s:%d - %s\n", client_ip, caddr.sin_port, buff);
@@ -163,28 +181,34 @@ void *connectionHandler(void *args)
         }
       }
       res[curr_offset] = '\0';
+
+      // write output to client
       write(cfd, res, curr_offset + 1);
       continue;
     }
 
-    // command is other than "nodes"
+    /** --- Command is other than "nodes" --- **/
+
+    // create command pipe linked list
     struct command_pipe *cmd_pipe = initCommandPipe();
     createCommandPipe(buff, cmd_pipe);
-    // printCommandPipe(cmd_pipe); // debug
     struct command *curr_cmd = cmd_pipe->head;
     char output[MAX_OUTPUT_SIZE + 1];
     int output_read_num;
     memset(output, '\0', MAX_OUTPUT_SIZE + 1);
+
     bool err = false;
+
     while (curr_cmd)
     {
       if (curr_cmd->machine == 0)
       { // broadcast
 
-        // printf("Broadcasting command %s\n", curr_cmd->cmd); // debug
         char res[MAX_OUTPUT_SIZE + 1];
         memset(res, '\0', MAX_OUTPUT_SIZE + 1);
         int offset = 0;
+
+        // loop through all currently active connections
         for (int i = 0; i < config->count; i++)
         {
           if (active_connections[i] == false)
@@ -192,15 +216,15 @@ void *connectionHandler(void *args)
             continue;
           }
           printf("-> Running command %s on machine n%d (%s:%d)\n", curr_cmd->cmd, i + 1, config->data[i], connection_ports[i]);
-          int cfd_client = clientSetup(config->data[i], connection_ports[i]); // act as a client and send request to the machine
+          int cfd_client = clientSetup(config->data[i], connection_ports[i], sfd); // act as a client and send request to the machine
           int cmd_len = strlen(curr_cmd->cmd);
 
+          // send command to server (clustershell_client)
           char input[MAX_COMMAND_SIZE + 1 + MAX_OUTPUT_SIZE + 1];
           strcpy(input, curr_cmd->cmd);                      // copy the command to input array
           input[strlen(curr_cmd->cmd)] = '\0';               // a \0 (null) separater between the command and input to the command
           strcpy(input + strlen(curr_cmd->cmd) + 1, output); // copy the previous output which will hence be the input to this command
 
-          // printf("Sending command %s to machine %d\n", input, i + 1); // debug
           int sz = strlen(input) + 1 + strlen(output) + 1;
           int write_num = write(cfd_client, input, sz);
           if (write_num != sz)
@@ -211,7 +235,7 @@ void *connectionHandler(void *args)
             break;
           }
 
-          // printf("Waiting for response from machine %d...\n", i + 1); // debug
+          // read output of command from server (clustershell_client)
           char temp[MAX_OUTPUT_SIZE + 1];
           int res_read_num = read(cfd_client, temp, MAX_OUTPUT_SIZE);
           if (res_read_num == -1)
@@ -222,9 +246,9 @@ void *connectionHandler(void *args)
             break;
           }
           temp[res_read_num] = '\0';
-          strcat(res, temp);
+          strcat(res, temp); // concatenate current response to final response
           offset += res_read_num;
-          // printf("Got response: %s\n", res); // debug
+
           close(cfd_client);
         }
 
@@ -235,6 +259,8 @@ void *connectionHandler(void *args)
         curr_cmd = curr_cmd->next;
         continue;
       }
+
+      /** ---- It is not a broadcast ---- **/
 
       int machine = curr_cmd->machine;
       if (machine == -1)
@@ -262,17 +288,16 @@ void *connectionHandler(void *args)
         break;
       }
 
-      // printf("Doing client setup with machine %d...\n", machine); // debug
       printf("-> Running command %s on machine n%d (%s:%d)\n", curr_cmd->cmd, machine + 1, config->data[machine], connection_ports[machine]);
-      int cfd_client = clientSetup(config->data[machine], connection_ports[machine]); // act as a client and send request to the machine
+      int cfd_client = clientSetup(config->data[machine], connection_ports[machine], sfd); // act as a client and send request to the machine
       int cmd_len = strlen(curr_cmd->cmd);
 
+      // send command to server (clustershell_client)
       char input[MAX_COMMAND_SIZE + 1 + MAX_OUTPUT_SIZE + 1];
       strcpy(input, curr_cmd->cmd);                      // copy the command to input array
       input[strlen(curr_cmd->cmd)] = '\0';               // a \0 (null) separater between the command and input to the command
       strcpy(input + strlen(curr_cmd->cmd) + 1, output); // copy the previous output which will hence be the input to this command
 
-      // printf("Sending command %s to machine %d\n", input, machine); // debug
       int sz = strlen(input) + 1 + strlen(output) + 1;
       int write_num = write(cfd_client, input, sz);
       if (write_num != sz)
@@ -283,7 +308,7 @@ void *connectionHandler(void *args)
         break;
       }
 
-      // printf("Waiting for response from machine %d...\n", machine); // debug
+      // read output of command from server (clustershell_client)
       output_read_num = read(cfd_client, output, MAX_OUTPUT_SIZE);
       if (output_read_num == -1)
       {
@@ -293,12 +318,10 @@ void *connectionHandler(void *args)
         break;
       }
       output[output_read_num] = '\0';
-      // printf("Got response: %s\n", output); // debug
+
       close(cfd_client);
       curr_cmd = curr_cmd->next;
     }
-
-    // printf("Writing output: %s\n", output); // debug
 
     // write final output to the client we got input from
     write(cfd, output, strlen(output) + 1);
@@ -307,6 +330,7 @@ void *connectionHandler(void *args)
     resetCommandPipe(cmd_pipe);
   }
 
+  active_connections[idx] = false;
   close(cfd);
   return NULL;
 }

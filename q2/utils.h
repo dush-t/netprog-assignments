@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #define TCP_BACKLOG 5
 #define CLIENT_PORT 8000
@@ -19,11 +20,9 @@
 #define MAX_COMMAND_SIZE 1024
 #define MAX_OUTPUT_SIZE 1024
 
-void assert(bool condition, char *error_string);
+void assert(bool condition, char *error_string, int fd1, int fd2);
 
-void errExit(char *err);
-
-int stringToNum(char *str);
+void errExit(char *err, int fd1, int fd2);
 
 int serverSetup(int port);
 
@@ -59,6 +58,6 @@ void createCommandPipe(char *cmd_input, struct command_pipe *cmd_pipe);
 
 void printCommandPipe(struct command_pipe *cmd_pipe);
 
-int clientSetup(char *addr, int port);
+int clientSetup(char *addr, int port, int arg_fd);
 
 #endif

@@ -1,43 +1,37 @@
 #include "utils.h"
 
 /**
- * @brief Print error and exit
+ * @brief Print error and exit. Cleanup by closing fd1 and fd2.
  * 
  * @param err 
  */
-void errExit(char *err)
+void errExit(char *err, int fd1, int fd2)
 {
+  close(fd1);
+  close(fd2);
   perror("ERROR:\n");
   perror(err);
   exit(EXIT_FAILURE);
 }
 
-void assert(bool condition, char *error_string)
+/**
+ * @brief Assert condition. If it fails, exit and cleanup.
+ * 
+ * @param condition 
+ * @param error_string 
+ * @param fd1 
+ * @param fd2 
+ */
+void assert(bool condition, char *error_string, int fd1, int fd2)
 {
   if (!condition)
   {
-    errExit(error_string);
+    errExit(error_string, fd1, fd2);
   }
-}
-
-int stringToNum(char *str)
-{
-  int num = 0;
-  int len = strlen(str);
-
-  for (int i = 0; i < len; i++)
-  {
-    if (str[i] == '\n')
-      continue;
-
-    assert(isdigit(str[i]), "invalid number");
-    num = num * 10 + str[i] - '0';
-  }
-  return num;
 }
 
 /**
- * @brief Setup a server and return the socket fd
+ * @brief Setup a server on given port and return the socket fd
  * 
  * @param port 
  * @return int 
@@ -52,18 +46,23 @@ int serverSetup(int port)
   saddr.sin_family = AF_INET;
   saddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-  assert((sfd = socket(PF_INET, SOCK_STREAM, 0)) != -1, "server setup error");
-  assert(setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != -1, "setsockopt error");
-  assert(bind(sfd, (struct sockaddr *)&saddr, sizeof(saddr)) != -1, "server bind error");
-  assert(listen(sfd, TCP_BACKLOG) != -1, "server listen error");
+  assert((sfd = socket(PF_INET, SOCK_STREAM, 0)) != -1, "server setup error", -1, -1);
+  assert(setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != -1, "setsockopt error", sfd, -1);
+  assert(bind(sfd, (struct sockaddr *)&saddr, sizeof(saddr)) != -1, "server bind error", sfd, -1);
+  assert(listen(sfd, TCP_BACKLOG) != -1, "server listen error", sfd, -1);
 
   return sfd;
 }
 
+/**
+ * @brief Parse the config file having (n1 IP) lines
+ * 
+ * @return parsed_config* 
+ */
 parsed_config *parseConfigFile()
 {
   FILE *fptr = fopen(CONFIG_FILE_PATH, "r");
-  assert(fptr != NULL, "config file open error");
+  assert(fptr != NULL, "config file open error", -1, -1);
   parsed_config *config = (parsed_config *)calloc(1, sizeof(parsed_config));
 
   int ip_arr_sz = 10;
@@ -73,7 +72,7 @@ parsed_config *parseConfigFile()
   while (fscanf(fptr, " %s", id) != EOF)
   {
     fscanf(fptr, " %s", ip);
-    assert(i < MAX_CLIENTS_ALLOWED, "more number of clients than allowed!");
+    assert(i < MAX_CLIENTS_ALLOWED, "more number of clients than allowed!", -1, -1);
     ip_arr[i] = strdup(ip);
     i++;
   }
@@ -84,6 +83,11 @@ parsed_config *parseConfigFile()
   return config;
 }
 
+/**
+ * @brief Free up memory by resetting config file object
+ * 
+ * @param config 
+ */
 void resetConfigObj(parsed_config *config)
 {
   char **temp = config->data;
@@ -96,6 +100,11 @@ void resetConfigObj(parsed_config *config)
   free(config->data);
 }
 
+/**
+ * @brief Init command pipe memory
+ * 
+ * @return struct command_pipe* 
+ */
 struct command_pipe *initCommandPipe()
 {
   struct command_pipe *cmd_pipe = (struct command_pipe *)calloc(1, sizeof(struct command_pipe));
@@ -104,6 +113,11 @@ struct command_pipe *initCommandPipe()
   return cmd_pipe;
 }
 
+/**
+ * @brief Free up memory by resetting command pipe object
+ * 
+ * @param cmd_pipe 
+ */
 void resetCommandPipe(struct command_pipe *cmd_pipe)
 {
   struct command *head = cmd_pipe->head;
@@ -117,6 +131,12 @@ void resetCommandPipe(struct command_pipe *cmd_pipe)
   cmd_pipe->head = NULL;
 }
 
+/**
+ * @brief Insert a command at the end of pipe
+ * 
+ * @param cmd_pipe 
+ * @param cmd 
+ */
 void insertCommandInPipe(struct command_pipe *cmd_pipe, struct command *cmd)
 {
   if (cmd_pipe->count == 0)
@@ -132,6 +152,14 @@ void insertCommandInPipe(struct command_pipe *cmd_pipe, struct command *cmd)
   cmd_pipe->count += 1;
 }
 
+/**
+ * @brief Create the command pipe from command input
+ * If no machine is specified in a command (eg: ls), then machine_name = -1
+ * If it is a broadcast (eg: n*.ls), then machine_name = 0
+ * 
+ * @param cmd_input 
+ * @param cmd_pipe 
+ */
 void createCommandPipe(char *cmd_input, struct command_pipe *cmd_pipe)
 {
   char *tok = strtok(cmd_input, "|");
@@ -159,12 +187,16 @@ void createCommandPipe(char *cmd_input, struct command_pipe *cmd_pipe)
 
         if (*machine_name != 'n')
         {
-          printf("Machine name %s does not begin with 'n'", machine_name);
-          errExit("machine name error");
+          printf("Machine name %s does not begin with 'n'\n", machine_name);
+          pthread_exit(NULL);
         }
 
         int machine;
-        assert(i >= 2, "error while converting machine name from string to int, make sure command is like n1.ls");
+        if (i < 2)
+        {
+          printf("Error while converting machine name (%s) from string to int, make sure command is like n1.ls\n", machine_name);
+          pthread_exit(NULL);
+        }
         if (machine_name[1] == '*')
         {
           machine = 0; // broadcast
@@ -175,7 +207,7 @@ void createCommandPipe(char *cmd_input, struct command_pipe *cmd_pipe)
           if (machine == 0)
           {
             printf("Machine name %s invalid.\n", machine_name);
-            errExit("machine number not valid, make sure command is like n1.ls");
+            pthread_exit(NULL);
           }
         }
         cmd->machine = machine;
@@ -235,7 +267,15 @@ void printCommandPipe(struct command_pipe *cmd_pipe)
   }
 }
 
-int clientSetup(char *addr, int port)
+/**
+ * @brief Setup TCP connection to a server at given address and port
+ * 
+ * @param addr 
+ * @param port 
+ * @param arg_fd 
+ * @return int 
+ */
+int clientSetup(char *addr, int port, int arg_fd)
 {
   struct sockaddr_in saddr;
   int sfd;
@@ -248,12 +288,12 @@ int clientSetup(char *addr, int port)
   if ((sfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
   {
     printf("Socket creation error while connecting to IP: %s, Port: %d.\n", addr, port);
-    errExit("[clientSetup] socket creation error");
+    errExit("[clientSetup] socket creation error", arg_fd, -1);
   }
   if (connect(sfd, (struct sockaddr *)&saddr, (socklen_t)sizeof(saddr)) == -1)
   {
     printf("Could not connect to IP: %s, Port: %d.\n", addr, port);
-    errExit("[clientSetup] connect error");
+    errExit("[clientSetup] connect error", arg_fd, sfd);
   }
 
   return sfd;
