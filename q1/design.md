@@ -65,6 +65,6 @@ For simplicity, several assumptions were made -
 - The maximum number of arguments in a command allowed is 20
 - The size of each argument should not exceed 30
 - Each identifier in a command should be separated by a space. eg: `ls | cat >> out.txt` is valid but `ls | cat>>out.txt` is not valid.
-- While deleting a short-cut command, only the index is required. eg: `sc -d 1` is a valid command.
+- It is assumed that the index of each shortcut command would be unique. Hence, while deleting a short-cut command, only the index is required. eg: both `sc -d 1` and `sc -d 1 ls | cat` are valid commands.
 
 ## [TO DO] Screenshots
