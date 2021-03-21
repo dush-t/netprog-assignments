@@ -70,11 +70,6 @@ char *executeCmd(char *cmd)
   }
   else
   {
-    FILE *fptr = popen(cmd, "r"); // run command
-                                  // store command in char buffer
-    int fd = fileno(fptr);
-    assert(fd != -1, "[executeCmd] error getting fd from fptr", sfd1, sfd2);
-
     // the command received from server has the form: "command\0command_input" where \0
     // is the null character. The "command" is the actual shell command like "ls" and "cat"
     // and the "command_input" is the input that should be sent to command (ie, the output of
@@ -93,6 +88,11 @@ char *executeCmd(char *cmd)
     close(pipe_fd[1]);
 
     assert(dup2(pipe_fd[0], STDIN_FILENO) != -1, "[executeCmd] dup2 pipe error", sfd1, sfd2);
+
+    FILE *fptr = popen(cmd, "r"); // run command
+                                  // store command in char buffer
+    int fd = fileno(fptr);
+    assert(fd != -1, "[executeCmd] error getting fd from fptr", sfd1, sfd2);
 
     int num_read = 0;
     char *buff = (char *)calloc(MAX_OUTPUT_SIZE + 1, sizeof(char));
@@ -152,6 +152,10 @@ int main(int argc, char **argv)
       if (out != NULL)
       {
         write(cfd, out, strlen(out));
+      }
+      else
+      {
+        write(cfd, "", 0);
       }
 
       free(out);
