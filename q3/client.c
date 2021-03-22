@@ -6,6 +6,7 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <pthread.h>
+#include <fcntl.h>
 
 #include "message.h"
 
@@ -20,22 +21,43 @@ int client_queue;
 
 int
 init_connection() {
-    char* squeue = getenv("SERVER_QUEUE_PATH");
-    char* cqueue = getenv("CLIENT_QUEUE_PATH");
-    strcpy(server_queue_path, squeue);
-    strcpy(client_queue_path, cqueue);
+    char* squeue_env = getenv("SERVER_QUEUE_PATH");
+    char* cqueue_env = getenv("CLIENT_QUEUE_PATH");
+    if (squeue_env == NULL) {
+        printf("SERVER_QUEUE_PATH env var not set.\nEnter server queue path: ");
+        scanf(" %s", server_queue_path);
+    } else {
+        strcpy(server_queue_path, squeue_env);
+    }
+    if (cqueue_env == NULL) {
+        printf("CLIENT_QUEUE_PATH env var not set. Creating a queue file.\n");
+        sprintf(client_queue_path, "./%s.%lu.queue", client_name, (unsigned long) time(NULL));
+        if (creat(client_queue_path, 0777) == -1) {
+            printf("Error while creating client queue. Exiting.\n");
+            return -1;
+        } else {
+            printf("Client queue created at %s\n", client_queue_path);
+        }
+    } else {
+        strcpy(client_queue_path, cqueue_env);
+    }
+
     printf("%s\n", client_queue_path);
 
-    key_t skey = ftok(squeue, 1);
+    key_t skey = ftok(server_queue_path, 1);
+    if (skey < 0) {
+        perror("ftok: while getting server queue key");
+        return -1;
+    }
     server_queue = msgget(skey, 0777 | IPC_CREAT);
     if (server_queue < 0) {
         perror("msgget");
         return -1;
     }
 
-    key_t ckey = ftok(cqueue, 0);
+    key_t ckey = ftok(client_queue_path, 0);
     if (ckey < 0) {
-        perror("ftok");
+        perror("ftok: while getting client queue key");
         return -1;
     }
     printf("ckey=%d\n", ckey);
@@ -210,15 +232,26 @@ create_group(char group_name[]) {
 
 int
 main(int argc, char** argv) {
-    strcpy(client_name, getenv("CLIENT_NAME"));
-    init_connection();
-    int status = register_self(client_name, client_queue_path);
+    char *client_name_env = getenv("CLIENT_NAME");
+    if (client_name_env == NULL) {
+        printf("CLIENT_NAME env var not set.\nEnter client name: ");
+        scanf(" %s", client_name);
+    } else {
+        strcpy(client_name, getenv("CLIENT_NAME"));
+    }
+    
+    int status = init_connection();
     if (status < 0) {
-        printf("Error initializing.\n");
+        printf("Error initialising connection.\n");
+        return -1;
+    }
+    status = register_self(client_name, client_queue_path);
+    if (status < 0) {
+        printf("Error registering client.\n");
         return -1;
     }
 
-    if (strcmp(argv[1], "join-group") == 0) {
+    if (argc > 1 && strcmp(argv[1], "join-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = join_group(group_name);
@@ -229,7 +262,7 @@ main(int argc, char** argv) {
         return 0;
     }
 
-    if (strcmp(argv[1], "create-group") == 0) {
+    if (argc > 1 && strcmp(argv[1], "create-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = create_group(group_name);
