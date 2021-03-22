@@ -191,6 +191,7 @@ register_client(int uid, char name[], char queuepath[]) {
 
     printf("Creating new client\n");
     key_t key = ftok(queuepath, 0);
+    printf("ckey=%d\n", key);
     int queue = msgget(key, 0777 | IPC_CREAT);
     if (queue < 0) {
         perror("msgget");

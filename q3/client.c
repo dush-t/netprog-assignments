@@ -24,6 +24,7 @@ init_connection() {
     char* cqueue = getenv("CLIENT_QUEUE_PATH");
     strcpy(server_queue_path, squeue);
     strcpy(client_queue_path, cqueue);
+    printf("%s\n", client_queue_path);
 
     key_t skey = ftok(squeue, 1);
     server_queue = msgget(skey, 0777 | IPC_CREAT);
@@ -33,8 +34,13 @@ init_connection() {
     }
 
     key_t ckey = ftok(cqueue, 0);
+    if (ckey < 0) {
+        perror("ftok");
+        return -1;
+    }
+    printf("ckey=%d\n", ckey);
 
-    client_queue = msgget(skey, 0777 | IPC_CREAT);
+    client_queue = msgget(ckey, 0777 | IPC_CREAT);
     if (client_queue < 0) {
         perror("msgget");
         return -1;
@@ -70,7 +76,7 @@ register_self(char name[], char queuepath[]) {
     ControlResponse cres;
     int cres_size = sizeof(cres) - sizeof(long);
 
-    status = msgrcv(server_queue, (void*)&cres, cres_size, CONTROL_RESPONSE, 0);
+    status = msgrcv(client_queue, (void*)&cres, cres_size, CONTROL_RESPONSE, 0);
     if (status < 0) {
         perror("msgrcv");
         return -1;
