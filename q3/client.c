@@ -251,7 +251,7 @@ main(int argc, char** argv) {
         return -1;
     }
 
-    if (argc > 1 && strcmp(argv[1], "join-group") == 0) {
+    if (argc == 3 && strcmp(argv[1], "join-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = join_group(group_name);
@@ -262,7 +262,7 @@ main(int argc, char** argv) {
         return 0;
     }
 
-    if (argc > 1 && strcmp(argv[1], "create-group") == 0) {
+    if (argc == 3 && strcmp(argv[1], "create-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = create_group(group_name);
