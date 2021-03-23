@@ -109,6 +109,8 @@ int get_gid(char group_name[]) {
         return -1;
     }
 
+
+
     QueryResponse qres;
     int qres_size = sizeof(qres) - sizeof(long);
     int gstat = msgrcv(client_queue, &qres, qres_size, QUERY_RESPONSE, 0);
@@ -140,6 +142,7 @@ join_group(char group_name[]) {
         return -1;
     }
 
+    printf("Found group with gid = %d\n", gid);
     ControlMessage cmsg;
     cmsg.mtype = CONTROL;
     cmsg.action = JOIN_GROUP;
@@ -154,16 +157,18 @@ join_group(char group_name[]) {
         return -1;
     }
 
+    printf("Sent group join request\n");
+
     ControlResponse cres;
     size = sizeof(cres) - sizeof(long);
-    status = msgrcv(client_queue, &cres, size, CONTROL, 0);
+    status = msgrcv(client_queue, &cres, size, CONTROL_RESPONSE, 0);
     if (status < 0) {
         perror("msgrcv");
         printf("Unable to receive response for group join request\n");
         return -1;
     }
 
-    printf("Joined group %s with id %d\n", group_name, gid);
+    printf("Successfully joined group %s with id %d\n", group_name, gid);
     return gid;
 }
 
@@ -202,10 +207,17 @@ create_group(char group_name[]) {
     }
 
     int gid = cres.gid;
-    printf("Successfully created new group %s with gid %d", group_name, gid);
+    printf("Successfully created new group %s with gid %d\n", group_name, gid);
     return gid;
 }
 
+int
+list_groups() {
+    printf("Listing groups...\n");
+
+    QueryRequest qreq;
+    
+}
 
 
 int

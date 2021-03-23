@@ -71,7 +71,10 @@ find_group_by_id(int id) {
 
 Group*
 find_group_by_name(char name[]) {
+    printf("Total groups = %d\n", total_groups);
+    printf("Target name = %s\n", name);
     for (int i = 0; i < total_groups; i++) {
+        printf("i = %d | name = %s\n", i, groups[0]->name);
         if (strcmp(groups[i]->name, name) == 0) {
             return groups[i];
         }
@@ -240,7 +243,7 @@ Group*
 create_group(char name[], Client* creator) {
     // Create Group struct and update relevant data structures
     Group* group = new_group(next_group_id++, name);
-    total_groups++;
+    groups[total_groups++] = group;
 
     int status = join_group(group, creator);
     if (status < 0) {
@@ -319,9 +322,13 @@ handle_queries() {
             return (void*)-1;
         }
 
+        printf("Received query. Finding src client\n");
+
         Client* src_client = find_client_by_id(query.src);
         QueryResponse res;
         res.mtype = QUERY_RESPONSE;
+
+        printf("Found client %s\n", src_client->name);
 
         switch (query.query_type) {
         case QUERY_CLIENT:
@@ -342,13 +349,17 @@ handle_queries() {
             break;
 
         case QUERY_GROUP:
+            printf("Group query\n");
             if (strcmp(query.content, "__ALL__") != 0) {
+                printf("Looking for specific group: %s\n", query.content);
                 Group* grp = find_group_by_name(query.content);
                 if (grp == NULL) {
+                    printf("Didn't find a group\n");
                     res.status = STATUS_ERROR;
                     break;
                 }
                 sprintf(res.content, "%d", grp->gid);
+                printf("Found group with gid = %d\n", grp->gid);
                 res.status = STATUS_OK;
             }
             else {
@@ -374,12 +385,14 @@ handle_control_msgs() {
     while (1) {
         ControlMessage cmsg;
         int size = sizeof(cmsg) - sizeof(cmsg.mtype);
-        printf("Expecting size=%d\n", size);
+        // printf("Expecting size=%d\n", size);
         int status = msgrcv(server_queue, (void*)&cmsg, size, CONTROL, 0);
         if (status < 0) {
             perror("msgrcv");
             return (void*)-1;
         }
+
+        // printf("whoopty\n");
 
         ControlResponse cres;
         cres.mtype = CONTROL_RESPONSE;
@@ -395,9 +408,13 @@ handle_control_msgs() {
         }
         
         case JOIN_GROUP: {
+            printf("Finding client\n");
             Client* clt = find_client_by_id(cmsg.src);
+            printf("Finding group\n");
             Group* grp = find_group_by_id(cmsg.gid);
+            printf("Joining group %s\n", grp->name);
             join_group(grp, clt);
+            printf("Joined group\n");
             cres.status = STATUS_OK;
             break;
         }
