@@ -208,7 +208,7 @@ bool createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
       printf("Short-cut command index not a number.\n");
       return false;
     }
-    while (cmd_input[i] != ' ')
+    while (cmd_input[i] != ' ' && cmd_input[i] != '\n')
     {
       if (!isdigit(cmd_input[i]))
       {

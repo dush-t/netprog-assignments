@@ -28,7 +28,7 @@ Sample command: `ls -l | wc | cat >> out.txt`
   ```
     shell> ls
     
-    shell> wc
+    shell> pwd
   ```
 
 - Piped commands
@@ -67,4 +67,15 @@ For simplicity, several assumptions were made -
 - Each identifier in a command should be separated by a space. eg: `ls | cat >> out.txt` is valid but `ls | cat>>out.txt` is not valid.
 - It is assumed that the index of each shortcut command would be unique. Hence, while deleting a short-cut command, only the index is required. eg: both `sc -d 1` and `sc -d 1 ls | cat` are valid commands.
 
-## [TO DO] Screenshots
+## Screenshots
+### Simple shell commands
+![Simple shell commands](./screenshots/simple_cmds.png?raw=true)
+
+### Piped commands
+![Piped commands](./screenshots/pipe_cmds.png?raw=true)
+
+### Background commands
+![Background commands](./screenshots/bg_cmds.png?raw=true)
+
+### Short-cut commands
+![Short-cut commands](./screenshots/sc_cmds.png?raw=true)
