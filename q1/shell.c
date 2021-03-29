@@ -267,10 +267,15 @@ bool createCmdPipe(char *cmd_input, command_pipe *cmd_pipe, hash_map *sc_map)
 
       int len = strlen(temp);
       assert(len > 0, "command is empty");
-      if (temp[len - 2] == '&') // it is a background command
+      int k = len - 1;
+      char last_char = temp[k];
+      while ((last_char == ' ' || last_char == '\n') && k >= 0)
+        last_char = temp[k--];
+
+      if (last_char == '&') // it is a background command
       {
         cmd_pipe->is_background = true;
-        temp[len - 2] = '\0';
+        temp[k + 1] = '\0';
       }
 
       if (pipeCount == 1)
@@ -660,7 +665,13 @@ void executeCmdPipe(command_pipe *cmd_pipe, pid_t initial_pgrp)
     if (!is_background)
     {
       tcsetpgrp(STDIN_FILENO, child_pid);
-      assert(wait(NULL) != -1, "wait error");
+      // cannot simply use wait(NULL) here. Consider running 2 commands:
+      // shell> ls&
+      // shell> pwd
+      // We do not wait for the background command to finish so it becomes a zombie command.
+      // Then, if we call wait(NULL) for the pwd command, wait immediately returns as there is a zombie in the system.
+      // So be careful and wait for the particular pid.
+      assert(waitpid(child_pid, NULL, 0) != -1, "wait error");
     }
   }
 }
