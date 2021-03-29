@@ -55,7 +55,7 @@ Additionally, the client on initialising forks a child process that binds to a p
 * To exit server, press `Ctrl+C`
 * To exit shell on client, run `exit`
 
-## [TO DO: Run all] Examples
+## Examples
 ```
 ls
 ```
@@ -80,4 +80,9 @@ nodes
 n*.ls | n2.wc
 ```
 
-## [TO DO] Screenshotss
+## Screenshotss
+![1](./screenshots/1.png?raw=true)
+![2](./screenshots/2.png?raw=true)
+![3](./screenshots/3.png?raw=true)
+![4](./screenshots/4.png?raw=true)
+![5](./screenshots/5.png?raw=true)
