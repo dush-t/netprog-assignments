@@ -43,7 +43,7 @@ new_client(int cid, char name[], char qpath[]) {
     Client* client = (Client*)malloc(sizeof(Client));
     client->cid = cid;
     sprintf(client->name, "%s", name);
-    sprintf(client->queue_path, "%s", name);
+    sprintf(client->queue_path, "%s", qpath);
 
     return client;
 }
@@ -137,6 +137,7 @@ send_group_message(Group* grp, Message msg_buf) {
             perror("msgsnd");
             return -1;
         }
+        printf("Message sent to %s, queue=%d\n", clients[i]->name, queue);
     }
 
     return 0;
@@ -187,8 +188,8 @@ register_client(int uid, char name[], char queuepath[]) {
     if (find_client_by_id(uid) != NULL) {
         printf("Client already exists\n");
         Client* clt = find_client_by_id(uid);
-        sprintf(clt->name, "%s", name);
-        sprintf(clt->queue_path, "%s", queuepath);
+        strcpy(clt->name, name);
+        strcpy(clt->queue_path, queuepath);
         return clt;
     }
 
@@ -220,6 +221,12 @@ register_client(int uid, char name[], char queuepath[]) {
 int
 join_group(Group* grp, Client* clt) {
     key_t key = ftok(clt->queue_path, grp->gid+1);
+    if (key < 0) {
+        printf("path: %s\n", clt->queue_path);
+        perror("ftok");
+        // return -1;
+    }
+    printf("Group %s key for client %s = %d\n", grp->name, clt->name, key);
     int grp_queue = msgget(key, 0664 | IPC_CREAT);
     if (grp_queue < 0) {
         perror("msgget");
@@ -267,6 +274,7 @@ handle_group_send_msgs() {
             return (void*)-1;
         }
 
+        printf("Forwarding message to group\n");
         Group* grp = find_group_by_id(msg.dst);
         send_group_message(grp, msg);
     }

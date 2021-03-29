@@ -6,8 +6,12 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 
 #include "message.h"
+
+#define MESSAGE_TYPE_GROUP 1
+#define MESSAGE_TYPE_CLIENT 2
 
 char server_queue_path[1024];
 char client_queue_path[1024];
@@ -126,7 +130,7 @@ int get_gid(char group_name[]) {
     }
 
     int gid = atoi(qres.content);
-    printf("Found group. Gid = %d", gid);
+    printf("Found group. Gid = %d\n", gid);
     return gid;
 }
 
@@ -211,12 +215,87 @@ create_group(char group_name[]) {
     return gid;
 }
 
-int
-list_groups() {
-    printf("Listing groups...\n");
+// int
+// list_groups() {
+//     printf("Listing groups...\n");
 
-    QueryRequest qreq;
+//     QueryRequest qreq;
     
+// }
+
+int
+start_message_send_loop(char name[], int type) {
+    int mtype, dst;
+    if (type == MESSAGE_TYPE_CLIENT) {
+        mtype = CLIENT_MESSAGE;
+        dst = 0; // TODO: Client messages
+    }
+    else if (type == MESSAGE_TYPE_GROUP) {
+        mtype = GROUP_MESSAGE;
+        dst = get_gid(name);
+    }
+
+    long auto_delete = -1;
+
+    while (1) {
+        Message msg;
+        msg.mtype = mtype;
+        msg.protocol = (int)mtype;
+        msg.src = getuid();
+        msg.dst = dst;
+        msg.auto_delete = -1;
+        msg.timestamp = (long)time(NULL);
+        strcpy(msg.src_name, client_name);
+
+        fgets(msg.content, sizeof(msg.content), stdin);
+        int status = msgsnd(server_queue, (void*)(&msg), sizeof(msg.content), 0);
+        if (status < 0) {
+            perror("msgsnd");
+            printf("Unable to send message. Exiting");
+            return -1;
+        }
+        printf("Message sent\n");
+    }
+
+    return 0;
+}
+
+int
+start_message_rcv_loop(char name[], int type) {
+    int mtype, target;
+    if (type == MESSAGE_TYPE_CLIENT) {
+        mtype = CLIENT_MESSAGE;
+        target = 0;
+    }
+    else if (type == MESSAGE_TYPE_GROUP) {
+        mtype = GROUP_MESSAGE;
+        target = get_gid(name) + 1;
+    }
+
+    key_t key = ftok(client_queue_path, target);
+    int queue = msgget(key, 0644);
+    if (key < 0 || queue < 0) {
+        perror("msgget");
+        printf("Unable to connect to message queue %d\n", queue);
+        return -1;
+    }
+
+    printf("Listening for messages, press Ctrl+C to stop\n");
+
+    while (1) {
+        Message msg;
+        int size = sizeof(msg) - sizeof(long);
+        int status = msgrcv(queue, (void*)&msg, size, mtype, 0);
+        if (status < 0) {
+            perror("msgrcv");
+            return -1;
+        }
+        time_t tstamp = (time_t)msg.timestamp;
+        struct tm tm = *localtime(&tstamp);
+        printf("[%s at %02d:%02d] %s", msg.src_name, tm.tm_hour, tm.tm_min, msg.content);
+    }
+
+    return 0;
 }
 
 
@@ -250,5 +329,35 @@ main(int argc, char** argv) {
             return -1;
         }
         return 0;
+    }
+
+    if (strcmp(argv[1], "read") == 0) {
+        if (argc < 4) {
+            printf("Usage: ./client read ['group' | 'client'] [name]\n");
+            return -1;
+        }
+
+        char* name = argv[3];
+        if (strcmp(argv[2], "group") == 0) {
+            return start_message_rcv_loop(name, MESSAGE_TYPE_GROUP);
+        }
+        else {
+            return start_message_rcv_loop(name, MESSAGE_TYPE_CLIENT);
+        }
+    }
+
+    if (strcmp(argv[1], "send-to") == 0) {
+        if (argc < 4) {
+            printf("Usage: ./client send-to ['group' | 'client'] [name]\n");
+            return -1;
+        }
+
+        char* name = argv[3];
+        if (strcmp(argv[2], "group") == 0) {
+            return start_message_send_loop(name, MESSAGE_TYPE_GROUP);
+        }
+        else {
+            return start_message_send_loop(name, MESSAGE_TYPE_CLIENT);
+        }
     }
 }

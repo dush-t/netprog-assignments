@@ -1,0 +1,2 @@
+gcc client.c -o client.out
+sudo cp ./client.out /home/testuser1/client.out
