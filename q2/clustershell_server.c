@@ -47,6 +47,7 @@ int main(int argc, char **argv)
   // activeConnections[i] is true when server is connected with client (i+1)
   bool *active_connections = (bool *)calloc(MAX_CLIENTS_ALLOWED, sizeof(bool));
   int *connection_ports = (int *)calloc(MAX_CLIENTS_ALLOWED, sizeof(int));
+  memset(active_connections, false, MAX_CLIENTS_ALLOWED);
 
   // parse config file
   parsed_config *config = parseConfigFile();
@@ -92,7 +93,7 @@ int main(int argc, char **argv)
  */
 int registerClientConnection(char *ip, parsed_config *config, bool *active_connections)
 {
-  for (int i = 0; i < MAX_CLIENTS_ALLOWED; i++)
+  for (int i = 0; i < MAX_CLIENTS_ALLOWED && i < config->count; i++)
   {
     if (strcmp(config->data[i], ip) == 0 && !active_connections[i])
     { // found ip address
@@ -126,7 +127,7 @@ void *connectionHandler(void *args)
   int idx;
   if ((idx = registerClientConnection(client_ip, config, active_connections)) == -1)
   {
-    printf("\n=== IP %s not found in config, exiting ===\n", client_ip);
+    printf("\n=== IP %s not found in config or IP already has maximum existing connections, exiting ===\n", client_ip);
     pthread_exit(NULL);
   }
 
