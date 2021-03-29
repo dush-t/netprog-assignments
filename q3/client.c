@@ -20,7 +20,15 @@ char client_name[1024];
 int server_queue;
 int client_queue;
 
+int
+get_queue(key_t key) {
+    int queue = msgget(key, 0644);
+    if (queue < 0) {
+        queue = msgget(key, 0644 | IPC_CREAT);
+    }
 
+    return queue;
+}
 
 int
 init_connection() {
@@ -38,7 +46,7 @@ init_connection() {
     }
 
     key_t ckey = ftok(cqueue, 0);
-    if (ckey < 0) {
+    if (ckey == -1) {
         perror("ftok");
         return -1;
     }
@@ -113,8 +121,6 @@ int get_gid(char group_name[]) {
         return -1;
     }
 
-
-
     QueryResponse qres;
     int qres_size = sizeof(qres) - sizeof(long);
     int gstat = msgrcv(client_queue, &qres, qres_size, QUERY_RESPONSE, 0);
@@ -134,6 +140,40 @@ int get_gid(char group_name[]) {
     return gid;
 }
 
+int get_cid(char client_name[]) {
+    printf("Finding user with name: %s\n", client_name);
+
+    QueryRequest query;
+    query.mtype = QUERY_REQUEST;
+    query.query_type = QUERY_CLIENT;
+    query.src = getuid();
+    strcpy(query.content, client_name);
+    int qsize = sizeof(query) - sizeof(long);
+    int qstat = msgsnd(server_queue, &query, qsize, 0);
+    if (qstat < 0) {
+        perror("msgsnd");
+        printf("Unable to send client query\n");
+        return -1;
+    }
+
+    QueryResponse qres;
+    int qres_size = sizeof(qres) - sizeof(long);
+    int gstat = msgrcv(client_queue, &qres, qres_size, QUERY_RESPONSE, 0);
+    if (gstat < 0) {
+        perror("msgrcv");
+        printf("Unable to receive group query response\n");
+        return -1;
+    }
+
+    if (qres.status == STATUS_ERROR) {
+        printf("Error resolving query: %s", qres.content);
+        return -1;
+    }
+
+    int cid = atoi(qres.content);
+    printf("Found client. Cid = %d\n", cid);
+    return cid;
+}
 
 
 int 
@@ -215,20 +255,62 @@ create_group(char group_name[]) {
     return gid;
 }
 
-// int
-// list_groups() {
-//     printf("Listing groups...\n");
 
-//     QueryRequest qreq;
-    
-// }
+void*
+handle_client_messages() {
+    int client_queues[1024][2];
+    int total_client_queues = 0;
+
+    while (1) {
+        Message msg;
+        int size = sizeof(msg) - sizeof(long);
+        int status = msgrcv(client_queue, (void*)&msg, size, CLIENT_MESSAGE, 0);
+        if (status < 0) {
+            perror("msgrcv");
+            return NULL;
+        }
+
+        int src = msg.src;
+        int client_queue = -1;
+        for (int i = 0; i < total_client_queues; i++) {
+            if (client_queues[i][0] == src) {
+                client_queue = client_queues[i][1];
+                break;
+            }
+        }
+        if (client_queue < 0) {
+            key_t client_key = ftok(client_queue_path, src + 2048);
+            client_queue = get_queue(client_key);
+            // client_queue = msgget(client_key, 0777 | IPC_CREAT);
+            // if (client_queue < 0) {
+            //     client_queue = msgget(client_key, 0644);
+            //     if (client_queue < 0) {
+            //         perror("msgget");
+            //         return NULL;
+            //     }
+            // }
+            client_queues[total_client_queues][0] = src;
+            client_queues[total_client_queues][1] = client_queue;
+        }
+
+        int sendstat = msgsnd(client_queue, (void*)&msg, size, 0);
+        if (sendstat < 0) {
+            perror("msgsnd");
+            return NULL;
+        }
+    }
+}
+
 
 int
 start_message_send_loop(char name[], int type) {
     int mtype, dst;
+    int client_chat_queue;
     if (type == MESSAGE_TYPE_CLIENT) {
         mtype = CLIENT_MESSAGE;
-        dst = 0; // TODO: Client messages
+        dst = get_cid(name);
+        key_t client_key = ftok(client_queue_path, dst+2048);
+        client_chat_queue = get_queue(client_key);
     }
     else if (type == MESSAGE_TYPE_GROUP) {
         mtype = GROUP_MESSAGE;
@@ -246,12 +328,22 @@ start_message_send_loop(char name[], int type) {
         msg.auto_delete = -1;
         msg.timestamp = (long)time(NULL);
         strcpy(msg.src_name, client_name);
-
         fgets(msg.content, sizeof(msg.content), stdin);
-        int status = msgsnd(server_queue, (void*)(&msg), sizeof(msg.content), 0);
+
+        int msgsize = sizeof(msg) - sizeof(long);
+        if (type == MESSAGE_TYPE_CLIENT) {
+            int status = msgsnd(client_chat_queue, (void*)&msg, msgsize, 0);
+            if (status < 0) {
+                perror("msgsnd");
+                printf("Failed to send message to self-queue\n");
+                return -1;
+            }
+        }
+
+        int status = msgsnd(server_queue, (void*)(&msg), msgsize, 0);
         if (status < 0) {
             perror("msgsnd");
-            printf("Unable to send message. Exiting");
+            printf("Unable to send message. Exiting\n");
             return -1;
         }
         printf("Message sent\n");
@@ -265,7 +357,9 @@ start_message_rcv_loop(char name[], int type) {
     int mtype, target;
     if (type == MESSAGE_TYPE_CLIENT) {
         mtype = CLIENT_MESSAGE;
-        target = 0;
+        target = get_cid(name) + 2048;
+        pthread_t router_thread;
+        pthread_create(&router_thread, NULL, handle_client_messages, NULL);
     }
     else if (type == MESSAGE_TYPE_GROUP) {
         mtype = GROUP_MESSAGE;
@@ -273,8 +367,13 @@ start_message_rcv_loop(char name[], int type) {
     }
 
     key_t key = ftok(client_queue_path, target);
-    int queue = msgget(key, 0644);
-    if (key < 0 || queue < 0) {
+    if (key == -1) {
+        perror("ftok");
+        printf("bruh %d\n", key);
+        return -1;
+    }
+    int queue = get_queue(key);
+    if (queue < 0) {
         perror("msgget");
         printf("Unable to connect to message queue %d\n", queue);
         return -1;
@@ -297,6 +396,8 @@ start_message_rcv_loop(char name[], int type) {
 
     return 0;
 }
+
+
 
 
 int
