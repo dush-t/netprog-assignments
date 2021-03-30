@@ -137,23 +137,17 @@ int
 send_group_message(Group* grp, Message msg_buf) {
     int num_clients = grp->num_clients;
     
-    msg_buf.mtype = GROUP_MESSAGE;
     msg_buf.protocol = GROUP_MESSAGE;
 
     for (int i = 0; i < num_clients; i++) {
-        // int queue = grp->clients[i]->queue;
-        int queue = get_client_queue_for_group(grp->clients[i], grp);
-        if (queue == -1) {
-            printf("Error: user not registered in group\n");
-            return -1;
-        }
+        msg_buf.mtype = grp->clients[i]->cid + 5000;
         int size = sizeof(msg_buf) - sizeof(msg_buf.mtype);
-        int status = msgsnd(queue, &msg_buf, size, 0);
+        int status = msgsnd(server_queue, &msg_buf, size, 0);
         if (status < 0) {
             perror("msgsnd");
             return -1;
         }
-        printf("Message sent to %s, queue=%d\n", clients[i]->name, queue);
+        printf("Message sent to %s, queue=%d\n", clients[i]->name, server_queue);
     }
 
     return 0;
@@ -163,9 +157,9 @@ int
 send_client_message(Client* clt, Message msg_buf) {
     msg_buf.mtype = CLIENT_MESSAGE;
     msg_buf.protocol = CLIENT_MESSAGE;
-
+    msg_buf.mtype = clt->cid + 5000;
     int size = sizeof(msg_buf) - sizeof(msg_buf.mtype);
-    int status = msgsnd(clt->private_queue, &msg_buf, size, 0);
+    int status = msgsnd(server_queue, &msg_buf, size, 0);
     if (status < 0) {
         perror("msgsnd");
         return -1;
@@ -225,31 +219,18 @@ register_client(int uid, char name[], char queuepath[]) {
 
     char control_qpath[1024], private_qpath[1024], group_qpath[1024];
     strcpy(control_qpath, queuepath); strcat(control_qpath, "control.queue");
-    strcpy(private_qpath, queuepath); strcat(private_qpath, "private.queue");
-    strcpy(group_qpath, queuepath); strcat(group_qpath, "group.queue");
     printf("control queue = %s\n", control_qpath);
-    printf("Group queue = %s\n", group_qpath);
     
     
     key_t control_key = ftok(control_qpath, 0);
-    key_t private_key = ftok(private_qpath, 0);
-    key_t group_key = ftok(group_qpath, 0);
-    printf("group_key = %d\n", group_key);
 
     int queue = get_queue(control_key);
-    int private_queue = get_queue(private_key);
-    int group_queue = get_queue(group_key);
-    printf("group_queue = %d\n", group_queue);
-    if (queue < 0 || private_queue < 0 || group_queue < 0) {
+    if (queue < 0) {
         return NULL;
     }
 
-    printf("Connected to the client's main queue\n");
-
     Client* client = new_client(uid, name, queuepath);
     client->queue = queue;
-    client->private_queue = private_queue;
-    client->group_queue = group_queue;
     client->num_groups = 0;
 
     printf("Client created\n");
@@ -264,22 +245,6 @@ register_client(int uid, char name[], char queuepath[]) {
 
 int
 join_group(Group* grp, Client* clt) {
-    key_t key = ftok(clt->queue_path, grp->gid+1);
-    if (key < 0) {
-        printf("path: %s\n", clt->queue_path);
-        perror("ftok");
-        // return -1;
-    }
-    printf("Group %s key for client %s = %d\n", grp->name, clt->name, key);
-    int grp_queue = msgget(key, 0664 | IPC_CREAT);
-    if (grp_queue < 0) {
-        perror("msgget");
-        return -1;
-    }
-
-    // Add group to client data structure
-    clt->groups[clt->num_groups][0] = grp->gid;
-    clt->groups[clt->num_groups][1] = grp_queue;
     clt->num_groups = clt->num_groups + 1;
 
     // Add client to group data structure

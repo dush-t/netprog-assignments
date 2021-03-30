@@ -17,7 +17,7 @@
 #define MESSAGE_TYPE_CLIENT 2
 
 char server_queue_path[1024];
-char client_queue_path[1024], group_queue_path[1024], private_queue_path[1024];
+char client_queue_path[1024];
 char client_name[1024];
 
 int server_queue;
@@ -52,11 +52,7 @@ int try_init_dir(char dir[]) {
 
     char control[1024], private[1024], group[1024];
     strcpy(control, dir); strcat(control, "/control.queue");
-    strcpy(private, dir); strcat(private, "/private.queue");
-    strcpy(group, dir); strcat(group, "/group.queue");
     int fd = open(control, 0777); close(fd);
-    fd = open(group, 0777); close(fd);
-    fd = open(private, 0777); close(fd);
 
     return 0;
 }
@@ -70,8 +66,6 @@ init_connection() {
 
     char control[1024], private[1024], group[1024];
     sprintf(client_queue_path, "%s/.simplemsg/control.queue", homedir);
-    sprintf(private_queue_path, "%s/.simplemsg/private.queue", homedir);
-    sprintf(group_queue_path, "%s/.simplemsg/group.queue", homedir);
 
     printf("%s\n", client_queue_path);
 
@@ -83,10 +77,6 @@ init_connection() {
     }
 
     key_t ckey = ftok(client_queue_path, 0);
-    key_t pkey = ftok(private_queue_path, 0);
-    key_t gkey = ftok(group_queue_path, 0);
-    printf("group_queue_path = %s\n", group_queue_path);
-    printf("Group key = %d\n", gkey);
     
     // if (ckey == -1) {
     //     perror("ftok");
@@ -95,11 +85,7 @@ init_connection() {
     printf("ckey=%d\n", ckey);
 
     client_queue = get_queue(ckey);
-    group_queue = get_queue(gkey);
-    private_queue = get_queue(pkey);
-    printf("Group queue = %d\n", group_queue);
     printf("Client queue = %d\n", client_queue);
-    printf("Private queue = %d\n", private_queue);
     if (client_queue < 0 || group_queue < 0 || private_queue < 0) {
         perror("msgget");
         return -1;
@@ -305,45 +291,31 @@ create_group(char group_name[]) {
 
 void*
 handle_messages() {
-    int queues[256][2];
-    int total_queues = 0;
-    char* path = (recvtype == MESSAGE_TYPE_CLIENT) ? private_queue_path : group_queue_path;
-    int target_queue = (recvtype == MESSAGE_TYPE_CLIENT) ? private_queue : group_queue;
-    int type = (recvtype == MESSAGE_TYPE_CLIENT) ? CLIENT_MESSAGE : GROUP_MESSAGE;
-
-    // printf("Started handle_messages thread\n");
-    // printf("target_path = %s\n", path);
-    // printf("corresponding queue = %d\n", target_queue);
-
+    int mtype = getuid() + 5000;
     while (1) {
         Message msg;
-        int size = sizeof(msg) - sizeof(long);
-        int status = msgrcv(target_queue, (void*)&msg, size, type, 0);
-        // printf("Received message\n");
+        int size = sizeof(msg) - sizeof(long); 
+        int status = msgrcv(server_queue, (void*)&msg, size, mtype, 0);
         if (status < 0) {
-            perror("msgrcv");
+            perror("handle_messages > msgrcv");
             return NULL;
         }
 
-        int target_key = (recvtype == MESSAGE_TYPE_CLIENT) ? msg.src : msg.dst;
-        int queue = -1;
-        for (int i = 0; i < total_queues; i++) {
-            if (queues[i][0] == target_key) {
-                queue = queues[i][1];
-                break;
+        if (msg.protocol == GROUP_MESSAGE) {
+            msg.mtype = 5000 + msg.dst;
+            int status = msgsnd(client_queue, &msg, size, 0);
+            if (status < 0) {
+                perror("handle_messages > GROUP_MESSAGE msgsnd");
+                return NULL;
             }
         }
-        if (queue < 0) {
-            key_t key = ftok(path, target_key + 1);
-            queue = get_queue(key);
-            queues[total_queues][0] = target_key;
-            queues[total_queues][1] = queue;
-        }
-
-        int sendstat = msgsnd(queue, (void*)&msg, size, 0);
-        if (sendstat < 0) {
-            perror("msgsnd");
-            return NULL;
+        else if (msg.protocol == CLIENT_MESSAGE) {
+            msg.mtype = 10000 + msg.src;
+            int status = msgsnd(client_queue, &msg, size, 0);
+            if (status < 0) {
+                perror("handle_messages > CLIENT_MESSAGE msgsnd");
+                return NULL;
+            }
         }
     }
 }
@@ -352,12 +324,9 @@ handle_messages() {
 int
 start_message_send_loop(char name[], int type) {
     int mtype, dst;
-    int private_chat_queue;
     if (type == MESSAGE_TYPE_CLIENT) {
         mtype = CLIENT_MESSAGE;
         dst = get_cid(name);
-        key_t private_key = ftok(private_queue_path, dst+1);
-        private_chat_queue = get_queue(private_key);
     }
     else if (type == MESSAGE_TYPE_GROUP) {
         mtype = GROUP_MESSAGE;
@@ -368,7 +337,6 @@ start_message_send_loop(char name[], int type) {
 
     while (1) {
         Message msg;
-        msg.mtype = mtype;
         msg.protocol = (int)mtype;
         msg.src = getuid();
         msg.dst = dst;
@@ -379,7 +347,8 @@ start_message_send_loop(char name[], int type) {
 
         int msgsize = sizeof(msg) - sizeof(long);
         if (type == MESSAGE_TYPE_CLIENT) {
-            int status = msgsnd(private_chat_queue, (void*)&msg, msgsize, 0);
+            msg.mtype = dst + 10000;
+            int status = msgsnd(client_queue, (void*)&msg, msgsize, 0);
             if (status < 0) {
                 perror("msgsnd");
                 printf("Failed to send message to self-queue\n");
@@ -387,6 +356,7 @@ start_message_send_loop(char name[], int type) {
             }
         }
 
+        msg.mtype = mtype;
         int status = msgsnd(server_queue, (void*)(&msg), msgsize, 0);
         if (status < 0) {
             perror("msgsnd");
@@ -401,44 +371,27 @@ start_message_send_loop(char name[], int type) {
 
 int
 start_message_rcv_loop(char name[], int type) {
-    int mtype, target;
+    int mtype;
     char queue_path[1024];
     
     recvtype = type;
     pthread_t router_thread;
 
     if (type == MESSAGE_TYPE_CLIENT) {
-        mtype = CLIENT_MESSAGE;
-        strcpy(queue_path, private_queue_path);
-        target = get_cid(name) + 1;
+        mtype = get_cid(name) + 10000;
     }
     else if (type == MESSAGE_TYPE_GROUP) {
-        mtype = GROUP_MESSAGE;
-        strcpy(queue_path, group_queue_path);
-        target = get_gid(name) + 1;
+        mtype = get_gid(name) + 5000;
     }
 
     pthread_create(&router_thread, NULL, handle_messages, NULL);
-
-    key_t key = ftok(queue_path, target);
-    if (key == -1) {
-        perror("ftok");
-        printf("bruh %d\n", key);
-        return -1;
-    }
-    int queue = get_queue(key);
-    if (queue < 0) {
-        perror("msgget");
-        printf("Unable to connect to message queue %d\n", queue);
-        return -1;
-    }
 
     printf("Listening for messages, press Ctrl+C to stop\n");
 
     while (1) {
         Message msg;
         int size = sizeof(msg) - sizeof(long);
-        int status = msgrcv(queue, (void*)&msg, size, mtype, 0);
+        int status = msgrcv(client_queue, (void*)&msg, size, mtype, 0);
         if (status < 0) {
             perror("msgrcv");
             return -1;
