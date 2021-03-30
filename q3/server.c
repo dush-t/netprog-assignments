@@ -347,6 +347,8 @@ handle_queries() {
 
         printf("Found client %s\n", src_client->name);
 
+        int send_at_end = 1;
+
         switch (query.query_type) {
         case QUERY_CLIENT:
             if (strcmp(query.content, "__ALL__") != 0) {
@@ -359,9 +361,13 @@ handle_queries() {
                 res.status = STATUS_OK;
             } 
             else {
-                char* result = get_all_clients_msg();
-                sprintf(res.content, "%s", result);
-                res.status = STATUS_OK;
+                for (int i = 0; i < total_clients; i++) {
+                    Client* clt = clients[i];
+                    sprintf(res.content, "name = %s | cid = %d", clt->name, clt->cid);
+                    res.status = STATUS_OK;
+                    send_query_response(src_client, res);
+                }
+                strcpy(res.content, "__END__");
             }
             break;
 
@@ -380,9 +386,13 @@ handle_queries() {
                 res.status = STATUS_OK;
             }
             else {
-                char* result = get_all_groups_msg();
-                sprintf(res.content, "%s", result);
-                res.status = STATUS_OK;
+                for (int i = 0; i < total_groups; i++) {
+                    Group* grp = groups[i];
+                    sprintf(res.content, "name = %s | gid = %d", grp->name, grp->gid);
+                    res.status = STATUS_OK;
+                    send_query_response(src_client, res);
+                }
+                strcpy(res.content, "__END__");
             }
             break;
         

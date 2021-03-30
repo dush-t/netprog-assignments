@@ -47,7 +47,7 @@ typedef struct QueryRequests {
 typedef struct QueryResponses {
     long  mtype;
     int status;
-    char content[MAX_LEN * 10];
+    char content[MAX_LEN * 2];
 } QueryResponse;
 
 typedef struct ControlMessages {
