@@ -2,9 +2,12 @@
 #include <stdlib.h>
 #include <sys/ipc.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/msg.h>
 #include <string.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "message.h"
 
@@ -18,6 +21,8 @@ typedef struct Clients {
     char name[MAX];
     char queue_path[MAX];
     int queue;
+    int private_queue;
+    int group_queue;
     int num_groups;
     int groups[MAX_GROUPS][2];
 } Client;
@@ -37,6 +42,23 @@ int total_clients = 0;
 int total_groups = 0;
 int server_queue;
 
+void 
+append_trailing_slash(char str[]) {
+    if (str[strlen(str) - 1] != '/') {
+        strcat(str, "/");
+    }
+}
+
+void 
+init_dirs() {
+    int status = mkdir("/tmp/simplemsg", 0777);
+    if (status == -1) {
+        return 0;
+    }
+
+    int fd = open("/tmp/simplemsg/server.queue", 0777);
+    close(fd);
+}
 
 Client* 
 new_client(int cid, char name[], char qpath[]) {
@@ -107,13 +129,7 @@ find_client_by_name(char name[]) {
 int
 get_client_queue_for_group(Client* clt, Group* grp) {
     int num_grps = clt->num_groups;
-    for (int i = 0; i < num_grps; i++) {
-        if (clt->groups[i][0] == grp->gid) {
-            return clt->groups[i][1];
-        }
-    }
-
-    return -1;
+    return clt->group_queue;
 }
 
 
@@ -149,7 +165,7 @@ send_client_message(Client* clt, Message msg_buf) {
     msg_buf.protocol = CLIENT_MESSAGE;
 
     int size = sizeof(msg_buf) - sizeof(msg_buf.mtype);
-    int status = msgsnd(clt->queue, &msg_buf, size, 0);
+    int status = msgsnd(clt->private_queue, &msg_buf, size, 0);
     if (status < 0) {
         perror("msgsnd");
         return -1;
@@ -182,23 +198,49 @@ send_control_response(Client* clt, ControlResponse cres) {
     return 0;
 }
 
+int
+get_queue(key_t key) {
+    int queue = msgget(key, 0777 | IPC_CREAT);
+    if (queue < 0) {
+        queue = msgget(key, 0644);
+        if (queue < 0) {
+            perror("get_queue > msgget");
+        }
+    }
+
+    return queue;
+}
+
 Client*
 register_client(int uid, char name[], char queuepath[]) {
     printf("Inside register_client\n");
     if (find_client_by_id(uid) != NULL) {
         printf("Client already exists\n");
         Client* clt = find_client_by_id(uid);
-        strcpy(clt->name, name);
-        strcpy(clt->queue_path, queuepath);
         return clt;
     }
 
     printf("Creating new client\n");
-    key_t key = ftok(queuepath, 0);
-    printf("ckey=%d\n", key);
-    int queue = msgget(key, 0777 | IPC_CREAT);
-    if (queue < 0) {
-        perror("msgget");
+    append_trailing_slash(queuepath);
+
+    char control_qpath[1024], private_qpath[1024], group_qpath[1024];
+    strcpy(control_qpath, queuepath); strcat(control_qpath, "control.queue");
+    strcpy(private_qpath, queuepath); strcat(private_qpath, "private.queue");
+    strcpy(group_qpath, queuepath); strcat(group_qpath, "group.queue");
+    printf("control queue = %s\n", control_qpath);
+    printf("Group queue = %s\n", group_qpath);
+    
+    
+    key_t control_key = ftok(control_qpath, 0);
+    key_t private_key = ftok(private_qpath, 0);
+    key_t group_key = ftok(group_qpath, 0);
+    printf("group_key = %d\n", group_key);
+
+    int queue = get_queue(control_key);
+    int private_queue = get_queue(private_key);
+    int group_queue = get_queue(group_key);
+    printf("group_queue = %d\n", group_queue);
+    if (queue < 0 || private_queue < 0 || group_queue < 0) {
         return NULL;
     }
 
@@ -206,6 +248,8 @@ register_client(int uid, char name[], char queuepath[]) {
 
     Client* client = new_client(uid, name, queuepath);
     client->queue = queue;
+    client->private_queue = private_queue;
+    client->group_queue = group_queue;
     client->num_groups = 0;
 
     printf("Client created\n");
@@ -454,7 +498,8 @@ handle_control_msgs() {
 
 int
 main() {
-    key_t key = ftok("server.queue", 1);
+    init_dirs();
+    key_t key = ftok("/tmp/simplemsg/server.queue", 1);
     server_queue = msgget(key, 0777 | IPC_CREAT);
     if (server_queue < 0) {
         printf("Failed to create server queue!\n");

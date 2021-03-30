@@ -1,2 +1,3 @@
 gcc -pthread client.c -o client.out
 sudo cp ./client.out /home/testuser1/client.out
+sudo cp ./client.out /home/testuser2/client.out
