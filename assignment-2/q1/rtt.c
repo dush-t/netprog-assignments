@@ -34,6 +34,8 @@ int main(int argc, char **argv)
   /* Parse IP input file */
   char *ip_list_file = argv[1];
   ip_list = parseIpList(argv[1]);
+  if (ip_list == NULL)
+    cleanupAndExit("parseIpList()");
   count = ip_list->count;
 
   /* Assign memory for storing proto* structures */

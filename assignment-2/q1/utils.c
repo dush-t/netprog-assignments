@@ -10,15 +10,24 @@ ip_list_struct *parseIpList(char *file_name)
 {
   FILE *fptr = fopen(file_name, "r");
   if (fptr == NULL)
-    errExit("Error while opening IP list file.\n");
+  {
+    perror("Error while opening IP list file.\n");
+    return NULL;
+  }
   ip_list_struct *list = (ip_list_struct *)calloc(1, sizeof(ip_list_struct));
   if (list == NULL)
-    errExit("Memory error while allocating IP list structure.\n");
+  {
+    perror("Memory error while allocating IP list structure.\n");
+    return NULL;
+  }
   list->count = 0;
   int curr_sz = 1000, curr_cnt = 0;
   list->ip = (ip_struct **)calloc(curr_sz, sizeof(ip_struct *));
   if (list->ip == NULL)
-    errExit("Memory error while allocating IP list structure.\n");
+  {
+    perror("Memory error while allocating IP list structure.\n");
+    return NULL;
+  }
   char ip[IP_V6_BUF_LEN];
   while (fscanf(fptr, " %s", ip) != EOF)
   {
@@ -28,7 +37,10 @@ ip_list_struct *parseIpList(char *file_name)
       curr_sz *= 2;
       list->ip = (ip_struct **)realloc(list->ip, curr_sz);
       if (list->ip == NULL)
-        errExit("Memory error while re-allocating IP list structure.\n");
+      {
+        perror("Memory error while re-allocating IP list structure.\n");
+        return NULL;
+      }
     }
 
     // get ip length ignoring any invalid char
@@ -50,7 +62,8 @@ ip_list_struct *parseIpList(char *file_name)
       list->count = curr_cnt + 1;
       freeIpList(list);
       sprintf(err, "Unrecognized IP type %s\n", ip);
-      errExit(err);
+      perror(err);
+      return NULL;
     }
 
     (list->ip)[curr_cnt]->ip = strdup(ip);
