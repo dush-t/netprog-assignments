@@ -6,6 +6,11 @@ void errExit(char *err)
   exit(EXIT_FAILURE);
 }
 
+/*
+* Parse IP list file and identify whether each IP is
+* v4 or v6. A simple method of identifying . vs :
+* is adopted.
+*/
 ip_list_struct *parseIpList(char *file_name)
 {
   FILE *fptr = fopen(file_name, "r");
@@ -44,28 +49,21 @@ ip_list_struct *parseIpList(char *file_name)
     }
 
     // get ip length ignoring any invalid char
-    int len = 0;
     for (int i = 0; i < strlen(ip); i++)
     {
-      if (isalnum(ip[i]) || ip[i] == '.' || ip[i] == ':')
-        len++;
+      if (ip[i] == '.')
+      {
+        list->ip[curr_cnt]->isV4 = true;
+        break;
+      }
+      else if (ip[i] == ':')
+      {
+        list->ip[curr_cnt]->isV4 = false;
+        break;
+      }
     }
 
     list->ip[curr_cnt] = (ip_struct *)calloc(1, sizeof(ip_struct));
-    if (len <= 15)
-      list->ip[curr_cnt]->isV4 = true;
-    else if (len <= 39)
-      list->ip[curr_cnt]->isV4 = false;
-    else
-    {
-      char err[200];
-      list->count = curr_cnt + 1;
-      freeIpList(list);
-      sprintf(err, "Unrecognized IP type %s\n", ip);
-      perror(err);
-      return NULL;
-    }
-
     (list->ip)[curr_cnt]->ip = strdup(ip);
     curr_cnt++;
   }
