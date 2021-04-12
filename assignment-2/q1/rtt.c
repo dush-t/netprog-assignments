@@ -10,67 +10,72 @@
 
 int v4_fd, v6_fd;
 double *rtt_vals;
-struct proto **sockets;
+struct proto **sockets = NULL;
 int count, remaining_count;
-queue *sendQ;
+queue *sendQ = NULL;
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 hash_map *ip_proto_map = NULL;
+ip_list_struct *ip_list = NULL;
 
 void *ip4RecvHelper(void *args);
 void *ip6RecvHelper(void *args);
 void *sendHelper(void *args);
 void printRtts();
+void cleanup();
+void cleanupAndExit(char *err);
 
 int main(int argc, char **argv)
 {
   if (argc != 2)
   {
-    errExit("Usage: ./rtt.out [IP_LIST_FILE_PATH]\n");
+    cleanupAndExit("Usage: ./rtt.out [IP_LIST_FILE_PATH]\n");
   }
 
   /* Parse IP input file */
   char *ip_list_file = argv[1];
-  ip_list_struct *ip_list = parseIpList(argv[1]);
+  ip_list = parseIpList(argv[1]);
   count = ip_list->count;
 
   /* Assign memory for storing proto* structures */
   sockets = (struct proto **)calloc(count, sizeof(struct proto *));
-  memset(sockets, 0, count * sizeof(struct proto *));
   if (sockets == NULL)
-  {
-    // TO DO: cleanup
-    errExit("calloc error while creating sockets struct\n");
-  }
+    cleanupAndExit("calloc error while creating sockets struct\n");
+  memset(sockets, 0, count * sizeof(struct proto *));
 
+  /* try to get root permissions, ignore if failed */
   setuid(getuid());
 
   /* initialise fd for communication */
   v4_fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
   if (v4_fd == -1)
-    errExit("v4_fd error.");
+    cleanupAndExit("v4_fd error.");
   v6_fd = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
   if (v6_fd == -1)
-    errExit("v6_fd error.");
-  // int no = 0;
-  // if (setsockopt(v6_fd, IPPROTO_IPV6, IPV6_V6ONLY, (void *)&no, sizeof(no)) == -1)
-  //   errExit("setsockopt IPV6_V6ONLY error.");
+    cleanupAndExit("v6_fd error.");
+
+  int no = 0;
+  setsockopt(v6_fd, IPPROTO_IPV6, IPV6_V6ONLY, (void *)&no, sizeof(no)); /* ignore if it gives error */
 
   /* make sockets nonblocking */
   int flags;
   if ((flags = fcntl(v4_fd, F_GETFL)) == -1)
-    errExit("fctnl");
+    cleanupAndExit("fctnl");
   if (fcntl(v4_fd, F_SETFL, flags | O_NONBLOCK) == -1)
-    errExit("fcntl");
+    cleanupAndExit("fcntl");
   if ((flags = fcntl(v6_fd, F_GETFL)) == -1)
-    errExit("fctnl");
+    cleanupAndExit("fctnl");
   if (fcntl(v6_fd, F_SETFL, flags | O_NONBLOCK) == -1)
-    errExit("fcntl");
+    cleanupAndExit("fcntl");
 
   /* To store rtt values */
   rtt_vals = (double *)calloc(count * 3, sizeof(double));
+  if (rtt_vals == NULL)
+    cleanupAndExit("calloc");
 
   /* init hash map */
   ip_proto_map = init_map(HASH_MAP_SZ);
+  if (ip_proto_map == NULL)
+    cleanupAndExit("init_map()");
 
   /* initialise proto structure for each ip */
   bool v4_found = false, v6_found = false;
@@ -78,32 +83,34 @@ int main(int argc, char **argv)
   {
     if ((sockets[i] = initIp(ip_list->ip[i], v4_fd, v6_fd)) == NULL)
     {
-      // TO DO: cleanup
-      errExit("Error while initialising IP address structure.\n");
+      cleanupAndExit("Error while initialising IP address structure.\n");
     }
 
     /* add to hash map */
     char *ip = (char *)calloc(IP_V6_BUF_LEN, sizeof(char));
+    if (ip == NULL)
+      cleanupAndExit("calloc()");
+
     if (getIpAddrFromProto(sockets[i], ip) == -1)
-    {
-      // TO DO: cleanup
-      errExit("getIpAddr");
-    }
+      cleanupAndExit("getIpAddrFromProto");
+
     if (insert_into_map(ip_proto_map, ip, sockets[i]) == -1)
-    {
-      // TO DO cleanup
-      errExit("insert_into_map");
-    }
+      cleanupAndExit("insert_into_map");
   }
 
   /* IP List no longer needed */
   freeIpList(ip_list);
+  ip_list = NULL;
 
   /* Initialize send queue and add sockets to it */
   sendQ = initQueue();
+  if (sendQ == NULL)
+    cleanupAndExit("initQueue()");
+
   for (int i = 0; i < count; i++)
   {
-    qPush(sendQ, sockets[i]);
+    if (qPush(sendQ, sockets[i]) == -1)
+      cleanupAndExit("qPush()");
   }
 
   struct timeval tv_start, tv_end;
@@ -112,9 +119,14 @@ int main(int argc, char **argv)
   remaining_count = count;
 
   pthread_t recv_thread_v4, recv_thread_v6, send_thread;
-  pthread_create(&recv_thread_v4, NULL, ip4RecvHelper, NULL);
-  pthread_create(&recv_thread_v6, NULL, ip6RecvHelper, NULL);
-  pthread_create(&send_thread, NULL, sendHelper, NULL);
+  if (pthread_create(&recv_thread_v4, NULL, ip4RecvHelper, NULL) != 0)
+    cleanupAndExit("pthread_create");
+
+  if (pthread_create(&recv_thread_v6, NULL, ip6RecvHelper, NULL) != 0)
+    cleanupAndExit("pthread_create");
+
+  if (pthread_create(&send_thread, NULL, sendHelper, NULL) != 0)
+    cleanupAndExit("pthread_create");
 
   pthread_join(recv_thread_v4, NULL);
   pthread_join(recv_thread_v6, NULL);
@@ -130,10 +142,7 @@ int main(int argc, char **argv)
   printf("\nTime taken: %.3fs, Throughput: %.2f (IP/sec)\n", time_taken / 1000, ((double)count / time_taken) * 1000);
   printf("\n==== END STATS ====\n");
 
-  // TO DO: cleanup
-  freeSocketList(sockets, count);
-  deleteQueue(sendQ);
-  delete_map(ip_proto_map);
+  cleanup();
 }
 
 void *ip4RecvHelper(void *args)
@@ -145,9 +154,9 @@ void *ip4RecvHelper(void *args)
   int sfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
   int flags;
   if ((flags = fcntl(sfd, F_GETFL)) == -1)
-    errExit("fctnl");
+    cleanupAndExit("fctnl");
   if (fcntl(sfd, F_SETFL, flags | O_NONBLOCK) == -1)
-    errExit("fcntl");
+    cleanupAndExit("fcntl");
 
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
@@ -156,7 +165,7 @@ void *ip4RecvHelper(void *args)
 
   //bind socket to port
   if (bind(sfd, (struct sockaddr *)&saddr, sizeof(saddr)) == -1)
-    errExit("bind()");
+    cleanupAndExit("bind()");
 
   int n;
   char buff[BUF_SIZE];
@@ -173,31 +182,29 @@ void *ip4RecvHelper(void *args)
 
       char ip[IP_V4_BUF_LEN];
       if (getIp4Addr(caddr.sin_addr, ip) == -1)
-        errExit("getIp4Addr()");
+        cleanupAndExit("getIp4Addr()");
 
       // printf("Recv Ip v4: %s\n", ip);
 
       struct proto *proto = find_in_map(ip_proto_map, ip);
       if (proto == NULL)
       {
-        char err[200];
-        sprintf(err, "IP %s not found in hash map", ip);
-        printf("%s\n", err);
+        /* IP not found in hash map */
         continue;
       }
 
       if ((proto->fproc)(buff, n, proto, &tv) == -1)
-        errExit("procV4()");
+        cleanupAndExit("procV4()");
 
       if (proto->nsent < 3)
       {
         if (pthread_mutex_lock(&mtx) != 0)
-          errExit("pthread_mutex_lock()");
+          cleanupAndExit("pthread_mutex_lock()");
 
         qPush(sendQ, proto);
 
         if (pthread_mutex_unlock(&mtx) != 0)
-          errExit("pthread_mutex_unlock()");
+          cleanupAndExit("pthread_mutex_unlock()");
       }
       else if (proto->nsent == 3)
       {
@@ -224,9 +231,9 @@ void *ip6RecvHelper(void *args)
   int sfd = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
   int flags;
   if ((flags = fcntl(sfd, F_GETFL)) == -1)
-    errExit("fctnl");
+    cleanupAndExit("fctnl");
   if (fcntl(sfd, F_SETFL, flags | O_NONBLOCK) == -1)
-    errExit("fcntl");
+    cleanupAndExit("fcntl");
 
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin6_family = AF_INET6;
@@ -240,7 +247,7 @@ void *ip6RecvHelper(void *args)
 
   //bind socket to port
   if (bind(sfd, (struct sockaddr *)&saddr, sizeof(saddr)) == -1)
-    errExit("bind()");
+    cleanupAndExit("bind()");
 
   int n;
   char buff[BUF_SIZE];
@@ -263,22 +270,22 @@ void *ip6RecvHelper(void *args)
       struct proto *proto = find_in_map(ip_proto_map, ip);
       if (proto == NULL)
       {
-        /* IP not found in list */
+        /* IP not found in hash map */
         continue;
       }
 
       if ((proto->fproc)(buff, n, proto, &tv) == -1)
-        errExit("procV6()");
+        cleanupAndExit("procV6()");
 
       if (proto->nsent < 3)
       {
         if (pthread_mutex_lock(&mtx) != 0)
-          errExit("pthread_mutex_lock()");
+          cleanupAndExit("pthread_mutex_lock()");
 
         qPush(sendQ, proto);
 
         if (pthread_mutex_unlock(&mtx) != 0)
-          errExit("pthread_mutex_unlock()");
+          cleanupAndExit("pthread_mutex_unlock()");
       }
       else if (proto->nsent == 3)
       {
@@ -299,13 +306,16 @@ void *ip6RecvHelper(void *args)
 void *sendHelper(void *args)
 {
   int *send_count = (int *)calloc(count, sizeof(int));
+  if (send_count == NULL)
+    cleanupAndExit("calloc");
+
   int tot_send_cnt = 0;
   int n;
 
   for (;;)
   {
     if (pthread_mutex_lock(&mtx) != 0)
-      errExit("pthread_mutex_lock()");
+      cleanupAndExit("pthread_mutex_lock()");
 
     if (sendQ->count > 0)
     {
@@ -322,7 +332,7 @@ void *sendHelper(void *args)
     }
 
     if (pthread_mutex_unlock(&mtx) != 0)
-      errExit("pthread_mutex_unlock()");
+      cleanupAndExit("pthread_mutex_unlock()");
     if (tot_send_cnt == 3 * count)
       break;
   }
@@ -340,9 +350,32 @@ void printRtts()
 
     memset(ipaddr, '\0', sizeof(ipaddr));
     if (getIpAddrFromProto(proto, ipaddr) == -1)
-      errExit("getIpAddrFromProto");
+      cleanupAndExit("getIpAddrFromProto");
 
     printf("%s: %.2fms %.2fms %.2fms\n", ipaddr, proto->rtt[0], proto->rtt[1], proto->rtt[2]);
   }
   printf("\n==== END RTTs ====\n");
+}
+
+void cleanup()
+{
+  if (sockets != NULL)
+    freeSocketList(sockets, count);
+  if (sendQ != NULL)
+    deleteQueue(sendQ);
+  if (ip_proto_map != NULL)
+    delete_map(ip_proto_map);
+  if (ip_list != NULL)
+    freeIpList(ip_list);
+
+  sockets = NULL;
+  sendQ = NULL;
+  ip_proto_map = NULL;
+  ip_list = NULL;
+}
+
+void cleanupAndExit(char *err)
+{
+  cleanup();
+  cleanupAndExit(err);
 }

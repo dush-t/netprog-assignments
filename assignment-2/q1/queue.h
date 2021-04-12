@@ -24,7 +24,7 @@ void *qFront(queue *q);
 
 void qPop(queue *q);
 
-void qPush(queue *q, void *data);
+int qPush(queue *q, void *data);
 
 void deleteQueue(queue *q);
 

@@ -3,6 +3,11 @@
 queue *initQueue()
 {
   queue *q = (queue *)calloc(1, sizeof(queue));
+  if (q == NULL)
+  {
+    perror("calloc");
+    return NULL;
+  }
   q->count = 0;
   q->front = NULL;
   return q;
@@ -29,16 +34,22 @@ void qPop(queue *q)
   q->count -= 1;
 }
 
-void qPush(queue *q, void *data)
+int qPush(queue *q, void *data)
 {
   if (q == NULL)
-    return;
+    return -1;
   queue_elem *elem = (queue_elem *)calloc(1, sizeof(queue_elem));
+  if (elem == NULL)
+  {
+    perror("calloc");
+    return -1;
+  }
   elem->data = data;
   elem->prev = q->front;
 
   q->front = elem;
   q->count += 1;
+  return 0;
 }
 
 void deleteQueue(queue *q)
