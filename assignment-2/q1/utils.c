@@ -10,6 +10,7 @@ void errExit(char *err)
 * Parse IP list file and identify whether each IP is
 * v4 or v6. A simple method of identifying . vs :
 * is adopted.
+* Returns NULL on error.
 */
 ip_list_struct *parseIpList(char *file_name)
 {
@@ -48,8 +49,14 @@ ip_list_struct *parseIpList(char *file_name)
       }
     }
 
+    list->ip[curr_cnt] = (ip_struct *)calloc(1, sizeof(ip_struct));
+    if (list->ip[curr_cnt] == NULL)
+    {
+      perror("Memory error while allocating ip_struct.\n");
+      return NULL;
+    }
     // get ip length ignoring any invalid char
-    for (int i = 0; i < strlen(ip); i++)
+    for (int i = 0; i < 10; i++)
     {
       if (ip[i] == '.')
       {
@@ -63,7 +70,6 @@ ip_list_struct *parseIpList(char *file_name)
       }
     }
 
-    list->ip[curr_cnt] = (ip_struct *)calloc(1, sizeof(ip_struct));
     (list->ip)[curr_cnt]->ip = strdup(ip);
     curr_cnt++;
   }
@@ -73,6 +79,9 @@ ip_list_struct *parseIpList(char *file_name)
   return list;
 }
 
+/* 
+* Deallocate the IP list structure
+*/
 void freeIpList(ip_list_struct *list)
 {
   if (list == NULL)
@@ -84,6 +93,10 @@ void freeIpList(ip_list_struct *list)
   free(list);
 }
 
+/*
+* Subtract 2 timeval structures (out - in) and store the
+* result in `out`.
+*/
 void tv_sub(struct timeval *out, struct timeval *in)
 {
   if ((out->tv_usec -= in->tv_usec) < 0)
@@ -94,6 +107,9 @@ void tv_sub(struct timeval *out, struct timeval *in)
   out->tv_sec -= in->tv_sec;
 }
 
+/*
+* Checksum for ICMP message (on IPv4)
+*/
 u_int16_t in_cksum(u_int16_t *addr, int len)
 {
   int nleft = len;
@@ -127,6 +143,12 @@ u_int16_t in_cksum(u_int16_t *addr, int len)
   return answer;
 }
 
+/*
+* Get IP address from struct proto*
+* Return:
+*   0: success
+*   -1: error
+*/
 int getIpAddrFromProto(struct proto *ip, char *res)
 {
   char ipaddr[IP_V6_BUF_LEN];
@@ -149,9 +171,16 @@ int getIpAddrFromProto(struct proto *ip, char *res)
   return 0;
 }
 
+/*
+* Initialize a struct proto object through IP
+* Return NULL on error.
+*/
 struct proto *initIp(ip_struct *ip, int v4_fd, int v6_fd)
 {
   struct proto *res = (struct proto *)calloc(1, sizeof(struct proto));
+  if (res == NULL)
+    return NULL;
+
   memset(res, 0, sizeof(struct proto));
   res->sasend = NULL;
 
@@ -164,6 +193,8 @@ struct proto *initIp(ip_struct *ip, int v4_fd, int v6_fd)
     res->nsent = 0;
 
     struct sockaddr_in *saddr = (struct sockaddr_in *)calloc(1, sizeof(struct sockaddr_in));
+    if (saddr == NULL)
+      return NULL;
     memset(saddr, 0, sizeof(struct sockaddr_in));
     inet_pton(AF_INET, ip->ip, &(saddr->sin_addr));
     saddr->sin_family = AF_INET;
@@ -180,6 +211,8 @@ struct proto *initIp(ip_struct *ip, int v4_fd, int v6_fd)
     res->nsent = 0;
 
     struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)calloc(1, sizeof(struct sockaddr_in6));
+    if (saddr == NULL)
+      return NULL;
     memset(saddr, 0, sizeof(struct sockaddr_in6));
     inet_pton(AF_INET6, ip->ip, &(saddr->sin6_addr));
     saddr->sin6_family = AF_INET6;
@@ -187,10 +220,17 @@ struct proto *initIp(ip_struct *ip, int v4_fd, int v6_fd)
     res->sasend = (struct sockaddr *)saddr;
     res->salen = sizeof(struct sockaddr_in6);
   }
-
   return res;
 }
 
+/*
+* Process ICMP data received through IPv4.
+* Calculate and store RTT value in the proto object.
+* Return:
+*   0: success
+*   -1: error
+*   -2: packet not echo reply, ignore message
+*/
 int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 {
   int head_len, icmp_len;
@@ -226,6 +266,7 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
       return -1;
     }
 
+    /* we sent the time as data to the ICMP msg which is echoed back */
     tvsend = (struct timeval *)icmp->icmp_data;
     tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
@@ -234,12 +275,18 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
   }
   else
   {
-    // TO DO
-    return -1;
+    /* Received some other reply, ignore message */
+    return -2;
   }
   return 0;
 }
 
+/*
+* Send ICMP message over IPv4
+* Return:
+*   0: success
+*   -1: error
+*/
 int sendV4(struct proto *proto)
 {
   int len;
@@ -261,6 +308,14 @@ int sendV4(struct proto *proto)
   return sendto(proto->fd, send_buf, len, 0, proto->sasend, proto->salen);
 }
 
+/*
+* Process ICMPV6 data received through IPv6.
+* Calculate and store RTT value in the proto object.
+* Return:
+*   0: success
+*   -1: error
+*   -2: packet not echo reply, ignore message
+*/
 int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 {
   double rtt;
@@ -279,6 +334,7 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
     if (len < 16)
       return -1; /* not enough data to use */
 
+    /* we sent the time as data to the ICMP msg which is echoed back */
     tvsend = (struct timeval *)(icmp6 + 1);
     tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
@@ -287,13 +343,19 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
   }
   else
   {
-    // TO DO
-    return -1;
+    /* Received some other reply, ignore message */
+    return -2;
   }
 
   return 0;
 }
 
+/*
+* Send ICMPV6 message over IPv6
+* Return:
+*   0: success
+*   -1: error
+*/
 int sendV6(struct proto *proto)
 {
   int len;
@@ -316,6 +378,9 @@ int sendV6(struct proto *proto)
   return sendto(proto->fd, send_buf, len, 0, proto->sasend, proto->salen);
 }
 
+/*
+* Deallocate struct proto**
+*/
 void freeSocketList(struct proto **sockets, int count)
 {
   if (sockets == NULL)
@@ -333,6 +398,9 @@ void freeSocketList(struct proto **sockets, int count)
   free(sockets);
 }
 
+/*
+* Get IPv4 address from struct in_addr
+*/
 int getIp4Addr(struct in_addr saddr, char *dest)
 {
   char ipaddr[IP_V4_BUF_LEN];
@@ -343,6 +411,9 @@ int getIp4Addr(struct in_addr saddr, char *dest)
   return 0;
 }
 
+/*
+* Get IPv6 address from struct in6_addr
+*/
 int getIp6Addr(struct in6_addr saddr, char *dest)
 {
   char ipaddr[IP_V6_BUF_LEN];

@@ -130,6 +130,7 @@ int main(int argc, char **argv)
   if (pthread_create(&send_thread, NULL, sendHelper, NULL) != 0)
     cleanupAndExit("pthread_create");
 
+  /* create threads for receiving ICMP msg, receiving ICMPV6 msg and sending ICMP msg */
   pthread_join(recv_thread_v4, NULL);
   pthread_join(recv_thread_v6, NULL);
   pthread_join(send_thread, NULL);
@@ -147,6 +148,9 @@ int main(int argc, char **argv)
   cleanup();
 }
 
+/*
+* Receive ICMP messages over IPv4 until all IP's RTTs have been calculated
+*/
 void *ip4RecvHelper(void *args)
 {
   struct sockaddr_in saddr, caddr;
@@ -195,8 +199,11 @@ void *ip4RecvHelper(void *args)
         continue;
       }
 
-      if ((proto->fproc)(buff, n, proto, &tv) == -1)
+      int proc_res;
+      if ((proc_res = (proto->fproc)(buff, n, proto, &tv)) == -1)
         cleanupAndExit("procV4()");
+      else if (proc_res == -2)
+        continue;
 
       if (proto->nsent < 3)
       {
@@ -224,6 +231,9 @@ void *ip4RecvHelper(void *args)
   return NULL;
 }
 
+/*
+* Receive ICMPV6 messages over IPv6 until all IP's RTTs have been calculated
+*/
 void *ip6RecvHelper(void *args)
 {
   struct sockaddr_in6 saddr, caddr;
@@ -276,8 +286,11 @@ void *ip6RecvHelper(void *args)
         continue;
       }
 
-      if ((proto->fproc)(buff, n, proto, &tv) == -1)
+      int proc_res;
+      if ((proc_res = (proto->fproc)(buff, n, proto, &tv)) == -1)
         cleanupAndExit("procV6()");
+      else if (proc_res == -2)
+        continue;
 
       if (proto->nsent < 3)
       {
@@ -305,6 +318,9 @@ void *ip6RecvHelper(void *args)
   return NULL;
 }
 
+/*
+* Send ICMP messages. No need to differentiate between v4 and v6 here as proto->fsend handles it.
+*/
 void *sendHelper(void *args)
 {
   int *send_count = (int *)calloc(count, sizeof(int));
@@ -342,6 +358,9 @@ void *sendHelper(void *args)
   return NULL;
 }
 
+/*
+* Print all RTT values
+*/
 void printRtts()
 {
   printf("\n==== BEGIN RTTs ====\n\n");
@@ -359,6 +378,7 @@ void printRtts()
   printf("\n==== END RTTs ====\n");
 }
 
+/* Free heap memory */
 void cleanup()
 {
   if (sockets != NULL)
