@@ -19,7 +19,7 @@ ip_list_struct *parseIpList(char *file_name)
   list->ip = (ip_struct **)calloc(curr_sz, sizeof(ip_struct *));
   if (list->ip == NULL)
     errExit("Memory error while allocating IP list structure.\n");
-  char ip[100];
+  char ip[IP_V6_BUF_LEN];
   while (fscanf(fptr, " %s", ip) != EOF)
   {
     if (curr_cnt == curr_sz)
@@ -118,7 +118,7 @@ u_int16_t in_cksum(u_int16_t *addr, int len)
 
 int getIpAddrFromProto(struct proto *ip, char *res)
 {
-  char ipaddr[100];
+  char ipaddr[IP_V6_BUF_LEN];
   if (ip->icmpproto == IPPROTO_ICMP)
   {
     // IPv4
@@ -219,8 +219,7 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
     tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
 
-    char ip_address[200];
-    // struct in_addr addr = ((struct sockaddr_in *)proto->sasend)->sin_addr;
+    char ip_address[IP_V4_BUF_LEN];
     inet_ntop(AF_INET, &ip->ip_src, ip_address, sizeof(ip_address));
     printf("%d bytes from %s: rtt=%.3f ms\n", icmp_len, ip_address, rtt);
 
@@ -257,12 +256,61 @@ int sendV4(struct proto *proto)
 
 int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 {
-  return -1;
+  double rtt;
+  struct icmp6_hdr *icmp6;
+  struct ip6_hdr *ip6 = (struct ip6_hdr *)ptr;
+  struct timeval *tvsend;
+  int hlim;
+
+  icmp6 = (struct icmp6_hdr *)ptr;
+  if (len < 8)
+    return -1; /* malformed packet */
+
+  if (icmp6->icmp6_type == ICMP6_ECHO_REPLY)
+  {
+    if (icmp6->icmp6_id != getpid())
+      return -1; /* invalid id */
+    if (len < 16)
+      return -1; /* not enough data to use */
+
+    tvsend = (struct timeval *)(icmp6 + 1);
+    tv_sub(tvsend, tvrecv);
+    rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
+
+    char ip_address[IP_V6_BUF_LEN];
+    inet_ntop(AF_INET6, &ip6->ip6_src, ip_address, sizeof(ip_address));
+    printf("Rcvd from %s: rtt=%.3f ms\n", ip_address, rtt);
+
+    // (proto->rtt)[proto->nsent - 1] = rtt;
+    return 0;
+  }
+  else
+  {
+    // TO DO
+    return -1;
+  }
 }
 
 int sendV6(struct proto *proto)
 {
-  return -1;
+  int len;
+  struct icmp6_hdr *icmp6;
+
+  char send_buf[BUF_SIZE];
+  icmp6 = (struct icmp6_hdr *)send_buf;
+  icmp6->icmp6_type = ICMP6_ECHO_REQUEST;
+  icmp6->icmp6_code = 0;
+  icmp6->icmp6_id = getpid();
+  icmp6->icmp6_seq = proto->nsent;
+  proto->nsent += 1;
+  memset((icmp6 + 1), 0xa5, DATA_LEN);
+
+  gettimeofday((struct timeval *)(icmp6 + 1), NULL);
+
+  len = 8 + DATA_LEN; /* checksum ICMP header and data */
+
+  /* Note: for ICMPV6, kernel calculates checksum for us */
+  return sendto(proto->fd, send_buf, len, 0, proto->sasend, proto->salen);
 }
 
 void freeSocketList(struct proto **sockets, int count)
@@ -282,11 +330,22 @@ void freeSocketList(struct proto **sockets, int count)
   free(sockets);
 }
 
-int getIpAddrFromPayload(char *payload, char *dest)
+int getIp4AddrFromPayload(char *payload, char *dest)
 {
   struct ip *ip = (struct ip *)payload;
-  char ipaddr[25];
+  char ipaddr[IP_V4_BUF_LEN];
   if (inet_ntop(AF_INET, &(ip->ip_src), ipaddr, sizeof(ipaddr)) == NULL)
+    return -1;
+
+  strcpy(dest, ipaddr);
+  return 0;
+}
+
+int getIp6AddrFromPayload(char *payload, char *dest)
+{
+  struct ip6_hdr *ip = (struct ip6_hdr *)payload;
+  char ipaddr[IP_V6_BUF_LEN];
+  if (inet_ntop(AF_INET6, &(ip->ip6_src), ipaddr, sizeof(ipaddr)) == NULL)
     return -1;
 
   strcpy(dest, ipaddr);

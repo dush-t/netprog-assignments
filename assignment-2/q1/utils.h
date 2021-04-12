@@ -24,6 +24,8 @@
 
 #define BUF_SIZE 1500
 #define DATA_LEN 56
+#define IP_V4_BUF_LEN 25
+#define IP_V6_BUF_LEN 100
 
 typedef struct
 {
@@ -73,6 +75,8 @@ void freeSocketList(struct proto **sockets, int count);
 
 int getIpAddrFromProto(struct proto *ip, char *res);
 
-int getIpAddrFromPayload(char *payload, char *dest);
+int getIp4AddrFromPayload(char *payload, char *dest);
+
+int getIp6AddrFromPayload(char *payload, char *dest);
 
 #endif

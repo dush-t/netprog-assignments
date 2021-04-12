@@ -6,20 +6,19 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 
-#define PORT 8000
 #define HASH_MAP_SZ 7919
 
 int v4_fd, v6_fd;
 double *rtt_vals;
 struct proto **sockets;
-int count;
+int count, remaining_count;
 queue *sendQ;
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 hash_map *ip_proto_map = NULL;
 
-void *recvHelper(void *args);
+void *ip4RecvHelper(void *args);
+void *ip6RecvHelper(void *args);
 void *sendHelper(void *args);
-void printIpAddr(struct sockaddr_in6 *saddr);
 void printRtts();
 
 int main(int argc, char **argv)
@@ -110,11 +109,15 @@ int main(int argc, char **argv)
   struct timeval tv_start, tv_end;
   gettimeofday(&tv_start, NULL);
 
-  pthread_t recv_thread, send_thread;
-  pthread_create(&recv_thread, NULL, recvHelper, NULL);
+  remaining_count = count;
+
+  pthread_t recv_thread_v4, recv_thread_v6, send_thread;
+  pthread_create(&recv_thread_v4, NULL, ip4RecvHelper, NULL);
+  pthread_create(&recv_thread_v6, NULL, ip6RecvHelper, NULL);
   pthread_create(&send_thread, NULL, sendHelper, NULL);
 
-  pthread_join(recv_thread, NULL);
+  pthread_join(recv_thread_v4, NULL);
+  pthread_join(recv_thread_v6, NULL);
   pthread_join(send_thread, NULL);
 
   gettimeofday(&tv_end, NULL);
@@ -133,7 +136,7 @@ int main(int argc, char **argv)
   delete_map(ip_proto_map);
 }
 
-void *recvHelper(void *args)
+void *ip4RecvHelper(void *args)
 {
   struct sockaddr_in saddr, caddr;
   memset(&caddr, 0, sizeof(caddr));
@@ -148,7 +151,7 @@ void *recvHelper(void *args)
 
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
-  saddr.sin_port = htons(PORT);
+  saddr.sin_port = 0;
   saddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   //bind socket to port
@@ -157,8 +160,6 @@ void *recvHelper(void *args)
 
   int n;
   char buff[BUF_SIZE];
-
-  int remaining_count = count;
 
   while (remaining_count > 0)
   {
@@ -169,9 +170,9 @@ void *recvHelper(void *args)
       struct timeval tv;
       gettimeofday(&tv, NULL);
 
-      char ip[25];
-      if (getIpAddrFromPayload(buff, ip) == -1)
-        errExit("getIpAddrFromPayload()");
+      char ip[IP_V4_BUF_LEN];
+      if (getIp4AddrFromPayload(buff, ip) == -1)
+        errExit("getIp4AddrFromPayload()");
 
       struct proto *proto = find_in_map(ip_proto_map, ip);
       if (proto == NULL)
@@ -210,6 +211,84 @@ void *recvHelper(void *args)
   return NULL;
 }
 
+void *ip6RecvHelper(void *args)
+{
+  struct sockaddr_in6 saddr, caddr;
+  memset(&caddr, 0, sizeof(caddr));
+  int clen;
+
+  int sfd = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+  int flags;
+  if ((flags = fcntl(sfd, F_GETFL)) == -1)
+    errExit("fctnl");
+  if (fcntl(sfd, F_SETFL, flags | O_NONBLOCK) == -1)
+    errExit("fcntl");
+
+  memset(&saddr, 0, sizeof(saddr));
+  saddr.sin6_family = AF_INET6;
+  saddr.sin6_port = 0;
+  saddr.sin6_addr = in6addr_any;
+
+  //bind socket to port
+  if (bind(sfd, (struct sockaddr *)&saddr, sizeof(saddr)) == -1)
+    errExit("bind()");
+
+  int n;
+  char buff[BUF_SIZE];
+
+  while (remaining_count > 0)
+  {
+    memset(buff, 0, BUF_SIZE);
+
+    if ((n = recvfrom(sfd, buff, BUF_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&clen)) > 0)
+    {
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+
+      char ip[IP_V6_BUF_LEN];
+      // if (getIp6AddrFromPayload(buff, ip) == -1)
+      //   errExit("getIp6AddrFromPayload()");
+      inet_ntop(AF_INET6, &(caddr.sin6_addr), ip, sizeof(ip));
+
+      printf("Got IPv6: %s\n", ip);
+
+      // struct proto *proto = find_in_map(ip_proto_map, ip);
+      // if (proto == NULL)
+      // {
+      //   char err[200];
+      //   sprintf(err, "IP %s not found in hash map", ip);
+      //   errExit(err);
+      // }
+
+      // if (procV4(buff, n, proto, &tv) == -1)
+      //   errExit("provV4()");
+
+      // if (proto->nsent < 3)
+      // {
+      //   if (pthread_mutex_lock(&mtx) != 0)
+      //     errExit("pthread_mutex_lock()");
+
+      //   qPush(sendQ, proto);
+
+      //   if (pthread_mutex_unlock(&mtx) != 0)
+      //     errExit("pthread_mutex_unlock()");
+      // }
+      // else if (proto->nsent == 3)
+      // {
+      //   proto->nsent += 1; // increase it so that this else block is not entered again
+      //   remaining_count--;
+      // }
+    }
+    else
+    {
+      /* there was nothing to received, sleep for 10microsec and give sender a chance */
+      usleep(10);
+    }
+  }
+
+  return NULL;
+}
+
 void *sendHelper(void *args)
 {
   int *send_count = (int *)calloc(count, sizeof(int));
@@ -224,7 +303,8 @@ void *sendHelper(void *args)
 
     if (sendQ->count > 0)
     {
-      if ((n = sendV4(qFront(sendQ))) > 0)
+      struct proto *proto = qFront(sendQ);
+      if ((n = (proto->fsend)(proto)) > 0)
       {
         qPop(sendQ);
         tot_send_cnt++;
@@ -244,26 +324,10 @@ void *sendHelper(void *args)
   return NULL;
 }
 
-void printIpAddr(struct sockaddr_in6 *saddr)
-{
-  // if (IN6_IS_ADDR_V4MAPPED(&(saddr->sin6_addr))) {
-  //   struct sockaddr_in temp;
-  //   temp.sin_family = AF_INET;
-  //   temp.sin_port = 0;
-  //   temp.sin_addr.s_addr = saddr->sin6_addr.__u6_addr.__u6_addr32;
-  // } else {
-
-  // }
-
-  char ipaddr[100];
-  inet_ntop(AF_INET6, &(saddr->sin6_addr), ipaddr, 100 * sizeof(char));
-  printf("Recvfrom: %s\n", ipaddr);
-}
-
 void printRtts()
 {
   printf("\n==== BEGIN RTTs ====\n\n");
-  char ipaddr[25];
+  char ipaddr[IP_V6_BUF_LEN];
   for (int i = 0; i < count; i++)
   {
     struct proto *proto = sockets[i];
