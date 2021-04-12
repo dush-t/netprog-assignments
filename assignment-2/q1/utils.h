@@ -75,8 +75,8 @@ void freeSocketList(struct proto **sockets, int count);
 
 int getIpAddrFromProto(struct proto *ip, char *res);
 
-int getIp4AddrFromPayload(char *payload, char *dest);
+int getIp4Addr(struct in_addr saddr, char *dest);
 
-int getIp6AddrFromPayload(char *payload, char *dest);
+int getIp6Addr(struct in6_addr saddr, char *dest);
 
 #endif

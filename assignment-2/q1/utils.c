@@ -204,7 +204,7 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 
   if (icmp->icmp_type == ICMP_ECHOREPLY)
   {
-    if (icmp->icmp_id != getpid())
+    if (icmp->icmp_id != (uint16_t)getpid())
     {
       perror("[procV4] Not a response to ECHO_REQUEST.\n");
       return -1;
@@ -218,10 +218,6 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
     tvsend = (struct timeval *)icmp->icmp_data;
     tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
-
-    char ip_address[IP_V4_BUF_LEN];
-    inet_ntop(AF_INET, &ip->ip_src, ip_address, sizeof(ip_address));
-    printf("%d bytes from %s: rtt=%.3f ms\n", icmp_len, ip_address, rtt);
 
     proto->rtt[proto->nsent - 1] = rtt;
   }
@@ -258,7 +254,6 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 {
   double rtt;
   struct icmp6_hdr *icmp6;
-  struct ip6_hdr *ip6 = (struct ip6_hdr *)ptr;
   struct timeval *tvsend;
   int hlim;
 
@@ -268,27 +263,24 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
 
   if (icmp6->icmp6_type == ICMP6_ECHO_REPLY)
   {
-    if (icmp6->icmp6_id != getpid())
-      return -1; /* invalid id */
+    if (icmp6->icmp6_id != (uint16_t)getpid())
+      return -1; /* incorrect pid */
     if (len < 16)
       return -1; /* not enough data to use */
 
     tvsend = (struct timeval *)(icmp6 + 1);
-    tv_sub(tvsend, tvrecv);
+    tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
 
-    char ip_address[IP_V6_BUF_LEN];
-    inet_ntop(AF_INET6, &ip6->ip6_src, ip_address, sizeof(ip_address));
-    printf("Rcvd from %s: rtt=%.3f ms\n", ip_address, rtt);
-
-    // (proto->rtt)[proto->nsent - 1] = rtt;
-    return 0;
+    (proto->rtt)[proto->nsent - 1] = rtt;
   }
   else
   {
     // TO DO
     return -1;
   }
+
+  return 0;
 }
 
 int sendV6(struct proto *proto)
@@ -330,22 +322,20 @@ void freeSocketList(struct proto **sockets, int count)
   free(sockets);
 }
 
-int getIp4AddrFromPayload(char *payload, char *dest)
+int getIp4Addr(struct in_addr saddr, char *dest)
 {
-  struct ip *ip = (struct ip *)payload;
   char ipaddr[IP_V4_BUF_LEN];
-  if (inet_ntop(AF_INET, &(ip->ip_src), ipaddr, sizeof(ipaddr)) == NULL)
+  if (inet_ntop(AF_INET, &saddr, ipaddr, sizeof(ipaddr)) == NULL)
     return -1;
 
   strcpy(dest, ipaddr);
   return 0;
 }
 
-int getIp6AddrFromPayload(char *payload, char *dest)
+int getIp6Addr(struct in6_addr saddr, char *dest)
 {
-  struct ip6_hdr *ip = (struct ip6_hdr *)payload;
   char ipaddr[IP_V6_BUF_LEN];
-  if (inet_ntop(AF_INET6, &(ip->ip6_src), ipaddr, sizeof(ipaddr)) == NULL)
+  if (inet_ntop(AF_INET6, &saddr, ipaddr, sizeof(ipaddr)) == NULL)
     return -1;
 
   strcpy(dest, ipaddr);
