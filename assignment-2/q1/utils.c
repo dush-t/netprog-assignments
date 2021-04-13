@@ -183,6 +183,7 @@ struct proto *initIp(ip_struct *ip, int v4_fd, int v6_fd)
 
   memset(res, 0, sizeof(struct proto));
   res->sasend = NULL;
+  res->rtt[0] = res->rtt[1] = res->rtt[2] = -1;
 
   if (ip->isV4)
   {
@@ -271,6 +272,7 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
     tv_sub(tvrecv, tvsend);
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
 
+    // printf("Recvd from %s, rtt: %f\n", inet_ntoa(ip->ip_src), rtt);
     proto->rtt[proto->nsent - 1] = rtt;
   }
   else
@@ -352,6 +354,10 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
     rtt = tvrecv->tv_sec * 1000 + tvrecv->tv_usec / 1000;
 
     (proto->rtt)[proto->nsent - 1] = rtt;
+
+    // char ipaddr[100];
+    // inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)proto->sasend)->sin6_addr), ipaddr, sizeof(ipaddr));
+    // printf("Recvd from %s, rtt: %f\n", ipaddr, rtt);
   }
   else
   {

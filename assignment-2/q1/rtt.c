@@ -12,8 +12,10 @@
 int v4_fd, v6_fd;
 /* array of proto* object corresponding to each IP */
 struct proto **sockets = NULL;
-/* total number of IPs */
+/* total number of IPs in file (may include duplicates) */
 int count;
+/* total number of unique IPs in file */
+int unique_count = 0;
 /* Queue having proto* structures to send data to (like a job queue) */
 queue *sendQ = NULL;
 /* mutex for synchronization b/w threads */
@@ -22,10 +24,18 @@ static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 hash_map *ip_proto_map = NULL;
 /* parse IP file into ip_list_struct */
 ip_list_struct *ip_list = NULL;
-/* number of IPv4 addresses in IP file */
+/* number of unique IPv4 addresses in IP file */
 int ipv4_count = 0;
-/* number of IPv6 addresses in IP file */
+/* number of unique IPv6 addresses in IP file */
 int ipv6_count = 0;
+/* number of IPs in which last packet failed to send */
+int ipv4_fail = 0, ipv6_fail = 0;
+/* threads */
+pthread_t recv_thread_v4, recv_thread_v6, send_thread;
+/* stop threads if true */
+bool stop_threads = false;
+/* number of packets for which RTT could not be calculated */
+int loss_count = 0;
 
 void *ip4RecvHelper(void *args);
 void *ip6RecvHelper(void *args);
@@ -33,12 +43,14 @@ void *sendHelper(void *args);
 void printRtts();
 void cleanup();
 void cleanupAndExit(char *err);
+void sigAlrmHandler(int signum);
 
 int main(int argc, char **argv)
 {
+  signal(SIGALRM, sigAlrmHandler);
   if (argc != 2)
   {
-    cleanupAndExit("Usage: ./rtt.out [IP_LIST_FILE_PATH]\n");
+    cleanupAndExit("Usage: ./rtt.out IP_LIST_FILE_PATH [TIME_LIMIT]\n");
   }
 
   /* Parse IP input file */
@@ -48,13 +60,10 @@ int main(int argc, char **argv)
     cleanupAndExit("parseIpList()");
   count = ip_list->count;
 
-  for (int i = 0; i < count; i++)
-  {
-    if (ip_list->ip[i]->isV4)
-      ipv4_count++;
-    else
-      ipv6_count++;
-  }
+  /* get time limit in seconds */
+  int time_limit = 20;
+  if (argc == 3)
+    time_limit = atoi(argv[2]);
 
   /* Assign memory for storing proto* structures */
   sockets = (struct proto **)calloc(count, sizeof(struct proto *));
@@ -96,21 +105,40 @@ int main(int argc, char **argv)
   bool v4_found = false, v6_found = false;
   for (int i = 0; i < count; i++)
   {
-    if ((sockets[i] = initIp(ip_list->ip[i], v4_fd, v6_fd)) == NULL)
+    if (find_in_map(ip_proto_map, ip_list->ip[i]->ip) == NULL)
     {
-      cleanupAndExit("Error while initialising IP address structure.\n");
+      if ((sockets[unique_count] = initIp(ip_list->ip[i], v4_fd, v6_fd)) == NULL)
+      {
+        cleanupAndExit("Error while initialising IP address structure.\n");
+      }
+
+      /* add to hash map */
+      char *ip = (char *)calloc(IP_V6_BUF_LEN, sizeof(char));
+      if (ip == NULL)
+        cleanupAndExit("calloc()");
+
+      if (getIpAddrFromProto(sockets[unique_count], ip) == -1)
+        cleanupAndExit("getIpAddrFromProto");
+
+      int res;
+      if ((res = insert_into_map(ip_proto_map, ip, sockets[unique_count])) == -1)
+        cleanupAndExit("insert_into_map");
+      else if (res == 0)
+      {
+        /* inserting in map was success */
+        if (sockets[unique_count]->icmpproto == IPPROTO_ICMP)
+          ipv4_count++;
+        else
+          ipv6_count++;
+
+        unique_count++;
+      }
     }
-
-    /* add to hash map */
-    char *ip = (char *)calloc(IP_V6_BUF_LEN, sizeof(char));
-    if (ip == NULL)
-      cleanupAndExit("calloc()");
-
-    if (getIpAddrFromProto(sockets[i], ip) == -1)
-      cleanupAndExit("getIpAddrFromProto");
-
-    if (insert_into_map(ip_proto_map, ip, sockets[i]) == -1)
-      cleanupAndExit("insert_into_map");
+    else
+    {
+      /* ignore duplicate IP */
+      printf("Note: Ignoring duplicate IP %s\n", ip_list->ip[i]->ip);
+    }
   }
 
   /* IP List no longer needed */
@@ -122,16 +150,19 @@ int main(int argc, char **argv)
   if (sendQ == NULL)
     cleanupAndExit("initQueue()");
 
-  for (int i = 0; i < count; i++)
+  for (int i = 0; i < unique_count; i++)
   {
     if (qPush(sendQ, sockets[i]) == -1)
       cleanupAndExit("qPush()");
   }
 
+  /* start time for throughput calculation */
   struct timeval tv_start, tv_end;
   gettimeofday(&tv_start, NULL);
 
-  pthread_t recv_thread_v4, recv_thread_v6, send_thread;
+  /* start alarm for time limit */
+  alarm(time_limit);
+
   if (pthread_create(&recv_thread_v4, NULL, ip4RecvHelper, NULL) != 0)
     cleanupAndExit("pthread_create");
 
@@ -146,6 +177,7 @@ int main(int argc, char **argv)
   pthread_join(recv_thread_v6, NULL);
   pthread_join(send_thread, NULL);
 
+  /* end time for throughput calculation */
   gettimeofday(&tv_end, NULL);
   tv_sub(&tv_end, &tv_start);
   double time_taken = tv_end.tv_sec * 1000 + tv_end.tv_usec / 1000; // in ms
@@ -153,7 +185,8 @@ int main(int argc, char **argv)
   printRtts();
 
   printf("\n==== BEGIN STATS ====\n");
-  printf("\nTime taken: %.3fs, Throughput: %.2f (IP/sec)\n", time_taken / 1000, ((double)count / time_taken) * 1000);
+  printf("\nNo. of unique IPs: %d, RTT success: %d, RTT loss: %d", unique_count, 3 * unique_count - loss_count, loss_count);
+  printf("\nTime taken: %.3fs, Throughput: %.2f (IP/sec)\n", time_taken / 1000, ((double)unique_count / time_taken) * 1000);
   printf("\n==== END STATS ====\n");
 
   cleanup();
@@ -187,7 +220,7 @@ void *ip4RecvHelper(void *args)
   int n;
   char buff[BUF_SIZE];
 
-  while (ipv4_count > 0)
+  while (ipv4_count - ipv4_fail > 0)
   {
     memset(buff, 0, BUF_SIZE);
     clen = sizeof(caddr);
@@ -200,8 +233,6 @@ void *ip4RecvHelper(void *args)
       char ip[IP_V4_BUF_LEN];
       if (getIp4Addr(caddr.sin_addr, ip) == -1)
         cleanupAndExit("getIp4Addr()");
-
-      // printf("Recv Ip v4: %s\n", ip);
 
       struct proto *proto = find_in_map(ip_proto_map, ip);
       if (proto == NULL)
@@ -234,6 +265,8 @@ void *ip4RecvHelper(void *args)
     }
     else
     {
+      if (stop_threads)
+        break;
       /* there was nothing to received, sleep for 10microsec and give sender a chance */
       usleep(10);
     }
@@ -275,7 +308,7 @@ void *ip6RecvHelper(void *args)
   int n;
   char buff[BUF_SIZE];
 
-  while (ipv6_count > 0)
+  while (ipv6_count - ipv6_fail > 0)
   {
     memset(buff, 0, BUF_SIZE);
     clen = sizeof(caddr);
@@ -321,6 +354,9 @@ void *ip6RecvHelper(void *args)
     }
     else
     {
+      if (stop_threads)
+        break;
+
       /* there was nothing to received, sleep for 10microsec and give sender a chance */
       usleep(10);
     }
@@ -334,7 +370,7 @@ void *ip6RecvHelper(void *args)
 */
 void *sendHelper(void *args)
 {
-  int *send_count = (int *)calloc(count, sizeof(int));
+  int *send_count = (int *)calloc(unique_count, sizeof(int));
   if (send_count == NULL)
     cleanupAndExit("calloc");
 
@@ -353,13 +389,50 @@ void *sendHelper(void *args)
         qPop(sendQ);
         tot_send_cnt++;
       }
+      else
+      {
+        /* 
+        * There was an error while sending data.
+        * Increase send count but do not pop element from queue
+        * if tries remaining in order to retry sending.
+        */
+        tot_send_cnt++;
+
+        if (proto->nsent == 3)
+        {
+          /* if it has been tried 3 times, simply pop it */
+          qPop(sendQ);
+          proto->nsent += 1;
+
+          /* receiver should not wait for this */
+          if (proto->icmpproto == IPPROTO_ICMP)
+            ipv4_fail++;
+          else
+            ipv6_fail++;
+        }
+        else if (proto->nsent < 3)
+        {
+          /* retry */
+          proto->rtt[proto->nsent] = -1;
+          proto->nsent += 1;
+        }
+      }
+    }
+    else
+    {
+      if (stop_threads)
+      {
+        if (pthread_mutex_unlock(&mtx) != 0)
+          cleanupAndExit("pthread_mutex_unlock()");
+        break;
+      }
     }
 
     if (pthread_mutex_unlock(&mtx) != 0)
       cleanupAndExit("pthread_mutex_unlock()");
 
     /* if 3 ICMP messages sent per IP, break */
-    if (tot_send_cnt == 3 * count)
+    if (tot_send_cnt == 3 * unique_count)
       break;
   }
 
@@ -373,7 +446,7 @@ void printRtts()
 {
   printf("\n==== BEGIN RTTs ====\n\n");
   char ipaddr[IP_V6_BUF_LEN];
-  for (int i = 0; i < count; i++)
+  for (int i = 0; i < unique_count; i++)
   {
     struct proto *proto = sockets[i];
 
@@ -382,6 +455,13 @@ void printRtts()
       cleanupAndExit("getIpAddrFromProto");
 
     printf("%s: %.2fms %.2fms %.2fms\n", ipaddr, proto->rtt[0], proto->rtt[1], proto->rtt[2]);
+
+    if (proto->rtt[0] == -1)
+      loss_count++;
+    if (proto->rtt[1] == -1)
+      loss_count++;
+    if (proto->rtt[2] == -1)
+      loss_count++;
   }
   printf("\n==== END RTTs ====\n");
 }
@@ -390,7 +470,7 @@ void printRtts()
 void cleanup()
 {
   if (sockets != NULL)
-    freeSocketList(sockets, count);
+    freeSocketList(sockets, unique_count);
   if (sendQ != NULL)
     deleteQueue(sendQ);
   if (ip_proto_map != NULL)
@@ -407,5 +487,13 @@ void cleanup()
 void cleanupAndExit(char *err)
 {
   cleanup();
-  cleanupAndExit(err);
+  errExit(err);
+}
+
+void sigAlrmHandler(int signum)
+{
+  if (signum != SIGALRM)
+    cleanupAndExit("sigalrm");
+  stop_threads = true;
+  printf("\n##### Time exceeded, stopping threads #####\n");
 }

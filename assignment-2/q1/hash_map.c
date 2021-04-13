@@ -15,7 +15,6 @@ int djb2Hash(char *str, int map_size)
     if (isalnum(c))
       hash = (((hash << 5) % map_size + hash) % map_size + c) % map_size; /* hash * 33 + c */
   }
-  // printf("<< Hash: %ld >>\n", hash);
   return hash % map_size;
 }
 
@@ -71,12 +70,16 @@ int insert_into_bucket(map_bucket *bucket, char *ip, void *data)
 
 /*
   Insert data into the map.
+  Return:
+    0: success
+    -1: error
+    -2: duplicate found
 */
 int insert_into_map(hash_map *map, char *ip, void *data)
 {
   /* return -1 if already exists */
   if (find_in_map(map, ip) != NULL)
-    return -1;
+    return -2;
 
   int bucket_idx = djb2Hash(ip, map->map_size);
   return insert_into_bucket(map->buckets[bucket_idx], ip, data);
