@@ -8,14 +8,24 @@
 
 #define HASH_MAP_SZ 7919
 
+/* socket descriptors for sending over IPv4 and IPv6 */
 int v4_fd, v6_fd;
-double *rtt_vals;
+/* array of proto* object corresponding to each IP */
 struct proto **sockets = NULL;
-int count, remaining_count;
+/* total number of IPs */
+int count;
+/* Queue having proto* structures to send data to (like a job queue) */
 queue *sendQ = NULL;
+/* mutex for synchronization b/w threads */
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+/* hash map to store IPs and search in O(1) */
 hash_map *ip_proto_map = NULL;
+/* parse IP file into ip_list_struct */
 ip_list_struct *ip_list = NULL;
+/* number of IPv4 addresses in IP file */
+int ipv4_count = 0;
+/* number of IPv6 addresses in IP file */
+int ipv6_count = 0;
 
 void *ip4RecvHelper(void *args);
 void *ip6RecvHelper(void *args);
@@ -37,6 +47,14 @@ int main(int argc, char **argv)
   if (ip_list == NULL)
     cleanupAndExit("parseIpList()");
   count = ip_list->count;
+
+  for (int i = 0; i < count; i++)
+  {
+    if (ip_list->ip[i]->isV4)
+      ipv4_count++;
+    else
+      ipv6_count++;
+  }
 
   /* Assign memory for storing proto* structures */
   sockets = (struct proto **)calloc(count, sizeof(struct proto *));
@@ -68,11 +86,6 @@ int main(int argc, char **argv)
     cleanupAndExit("fctnl");
   if (fcntl(v6_fd, F_SETFL, flags | O_NONBLOCK) == -1)
     cleanupAndExit("fcntl");
-
-  /* To store rtt values */
-  rtt_vals = (double *)calloc(count * 3, sizeof(double));
-  if (rtt_vals == NULL)
-    cleanupAndExit("calloc");
 
   /* init hash map */
   ip_proto_map = init_map(HASH_MAP_SZ);
@@ -117,8 +130,6 @@ int main(int argc, char **argv)
 
   struct timeval tv_start, tv_end;
   gettimeofday(&tv_start, NULL);
-
-  remaining_count = count;
 
   pthread_t recv_thread_v4, recv_thread_v6, send_thread;
   if (pthread_create(&recv_thread_v4, NULL, ip4RecvHelper, NULL) != 0)
@@ -176,7 +187,7 @@ void *ip4RecvHelper(void *args)
   int n;
   char buff[BUF_SIZE];
 
-  while (remaining_count > 0)
+  while (ipv4_count > 0)
   {
     memset(buff, 0, BUF_SIZE);
     clen = sizeof(caddr);
@@ -218,7 +229,7 @@ void *ip4RecvHelper(void *args)
       else if (proto->nsent == 3)
       {
         proto->nsent += 1; // increase it so that this else block is not entered again
-        remaining_count--;
+        ipv4_count--;
       }
     }
     else
@@ -264,7 +275,7 @@ void *ip6RecvHelper(void *args)
   int n;
   char buff[BUF_SIZE];
 
-  while (remaining_count > 0)
+  while (ipv6_count > 0)
   {
     memset(buff, 0, BUF_SIZE);
     clen = sizeof(caddr);
@@ -305,7 +316,7 @@ void *ip6RecvHelper(void *args)
       else if (proto->nsent == 3)
       {
         proto->nsent += 1; // increase it so that this else block is not entered again
-        remaining_count--;
+        ipv6_count--;
       }
     }
     else
