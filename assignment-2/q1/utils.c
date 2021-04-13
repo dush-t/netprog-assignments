@@ -305,7 +305,19 @@ int sendV4(struct proto *proto)
   icmp->icmp_cksum = 0;
   icmp->icmp_cksum = in_cksum((u_short *)icmp, len);
 
-  return sendto(proto->fd, send_buf, len, 0, proto->sasend, proto->salen);
+  int n;
+  int offset = 0;
+  /* since it is non blocking I/O, send until complete data is sent */
+  while (len > 0 && (n = sendto(proto->fd, send_buf + offset, len, 0, proto->sasend, proto->salen)) < len)
+  {
+    if (n == -1)
+    {
+      return -1;
+    }
+    len -= n;
+    offset += n;
+  }
+  return 0;
 }
 
 /*
@@ -375,7 +387,20 @@ int sendV6(struct proto *proto)
   len = 8 + DATA_LEN; /* checksum ICMP header and data */
 
   /* Note: for ICMPV6, kernel calculates checksum for us */
-  return sendto(proto->fd, send_buf, len, 0, proto->sasend, proto->salen);
+
+  /* since it is non blocking I/O, send until complete data is sent */
+  int n;
+  int offset = 0;
+  while (len > 0 && (n = sendto(proto->fd, send_buf + offset, len, 0, proto->sasend, proto->salen)) < len)
+  {
+    if (n == -1)
+    {
+      return -1;
+    }
+    len -= n;
+    offset += n;
+  }
+  return 0;
 }
 
 /*

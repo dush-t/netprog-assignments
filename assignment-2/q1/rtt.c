@@ -339,7 +339,6 @@ void *sendHelper(void *args)
     cleanupAndExit("calloc");
 
   int tot_send_cnt = 0;
-  int n;
 
   for (;;)
   {
@@ -349,19 +348,17 @@ void *sendHelper(void *args)
     if (sendQ->count > 0)
     {
       struct proto *proto = qFront(sendQ);
-      if ((n = (proto->fsend)(proto)) > 0)
+      if ((proto->fsend)(proto) == 0)
       {
         qPop(sendQ);
         tot_send_cnt++;
-      }
-      else
-      {
-        printf("sendto returned -1\n");
       }
     }
 
     if (pthread_mutex_unlock(&mtx) != 0)
       cleanupAndExit("pthread_mutex_unlock()");
+
+    /* if 3 ICMP messages sent per IP, break */
     if (tot_send_cnt == 3 * count)
       break;
   }
