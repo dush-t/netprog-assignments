@@ -7,6 +7,7 @@
 #include <sys/sem.h>
 
 #define HASH_MAP_SZ 7919
+#define DEFAULT_TIME_LIMIT 30
 
 /* socket descriptors for sending over IPv4 and IPv6 */
 int v4_fd, v6_fd;
@@ -48,9 +49,9 @@ void sigAlrmHandler(int signum);
 int main(int argc, char **argv)
 {
   signal(SIGALRM, sigAlrmHandler);
-  if (argc != 2)
+  if (argc < 2)
   {
-    cleanupAndExit("Usage: ./rtt.out IP_LIST_FILE_PATH [TIME_LIMIT]\n");
+    cleanupAndExit("Usage: ./rtt.out IP_LIST_FILE_PATH [TIME_LIMIT] [SHOW_STATS (y/n)]\n");
   }
 
   /* Parse IP input file */
@@ -61,9 +62,14 @@ int main(int argc, char **argv)
   count = ip_list->count;
 
   /* get time limit in seconds */
-  int time_limit = 20;
+  int time_limit = DEFAULT_TIME_LIMIT;
   if (argc == 3)
     time_limit = atoi(argv[2]);
+
+  /* check if stats are to be shown */
+  bool show_stats = false;
+  if (argc == 4 && strcmp(argv[3], "y") == 0)
+    show_stats = true;
 
   /* Assign memory for storing proto* structures */
   sockets = (struct proto **)calloc(count, sizeof(struct proto *));
@@ -184,10 +190,13 @@ int main(int argc, char **argv)
 
   printRtts();
 
-  printf("\n==== BEGIN STATS ====\n");
-  printf("\nNo. of unique IPs: %d, RTT success: %d, RTT loss: %d", unique_count, 3 * unique_count - loss_count, loss_count);
-  printf("\nTime taken: %.3fs, Throughput: %.2f (IP/sec)\n", time_taken / 1000, ((double)unique_count / time_taken) * 1000);
-  printf("\n==== END STATS ====\n");
+  if (show_stats)
+  {
+    printf("\n==== BEGIN STATS ====\n");
+    printf("\nNo. of unique IPs: %d, RTT success: %d, RTT loss: %d", unique_count, 3 * unique_count - loss_count, loss_count);
+    printf("\nTime taken: %.3fs, Timeout expired: %s, Throughput: %.2f (IP/sec)\n", time_taken / 1000, stop_threads ? "yes" : "no", ((double)unique_count / time_taken) * 1000);
+    printf("\n==== END STATS ====\n");
+  }
 
   cleanup();
 }
