@@ -2,9 +2,12 @@
 #include <stdlib.h>
 #include <sys/ipc.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/msg.h>
 #include <string.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "message.h"
 
@@ -37,13 +40,30 @@ int total_clients = 0;
 int total_groups = 0;
 int server_queue;
 
+void 
+append_trailing_slash(char str[]) {
+    if (str[strlen(str) - 1] != '/') {
+        strcat(str, "/");
+    }
+}
+
+void 
+init_dirs() {
+    int status = mkdir("/tmp/simplemsg", 0777);
+    if (status == -1) {
+        return 0;
+    }
+
+    int fd = open("/tmp/simplemsg/server.queue", 0777);
+    close(fd);
+}
 
 Client* 
 new_client(int cid, char name[], char qpath[]) {
     Client* client = (Client*)malloc(sizeof(Client));
     client->cid = cid;
     sprintf(client->name, "%s", name);
-    sprintf(client->queue_path, "%s", name);
+    sprintf(client->queue_path, "%s", qpath);
 
     return client;
 }
@@ -71,7 +91,10 @@ find_group_by_id(int id) {
 
 Group*
 find_group_by_name(char name[]) {
+    printf("Total groups = %d\n", total_groups);
+    printf("Target name = %s\n", name);
     for (int i = 0; i < total_groups; i++) {
+        printf("i = %d | name = %s\n", i, groups[0]->name);
         if (strcmp(groups[i]->name, name) == 0) {
             return groups[i];
         }
@@ -102,38 +125,20 @@ find_client_by_name(char name[]) {
 
 
 int
-get_client_queue_for_group(Client* clt, Group* grp) {
-    int num_grps = clt->num_groups;
-    for (int i = 0; i < num_grps; i++) {
-        if (clt->groups[i][0] == grp->gid) {
-            return clt->groups[i][1];
-        }
-    }
-
-    return -1;
-}
-
-
-int
 send_group_message(Group* grp, Message msg_buf) {
     int num_clients = grp->num_clients;
     
-    msg_buf.mtype = GROUP_MESSAGE;
     msg_buf.protocol = GROUP_MESSAGE;
 
     for (int i = 0; i < num_clients; i++) {
-        // int queue = grp->clients[i]->queue;
-        int queue = get_client_queue_for_group(grp->clients[i], grp);
-        if (queue == -1) {
-            printf("Error: user not registered in group\n");
-            return -1;
-        }
+        msg_buf.mtype = grp->clients[i]->cid + 5000;
         int size = sizeof(msg_buf) - sizeof(msg_buf.mtype);
-        int status = msgsnd(queue, &msg_buf, size, 0);
+        int status = msgsnd(server_queue, &msg_buf, size, 0);
         if (status < 0) {
             perror("msgsnd");
             return -1;
         }
+        printf("Message sent to %s, queue=%d\n", clients[i]->name, server_queue);
     }
 
     return 0;
@@ -143,9 +148,9 @@ int
 send_client_message(Client* clt, Message msg_buf) {
     msg_buf.mtype = CLIENT_MESSAGE;
     msg_buf.protocol = CLIENT_MESSAGE;
-
+    msg_buf.mtype = clt->cid + 5000;
     int size = sizeof(msg_buf) - sizeof(msg_buf.mtype);
-    int status = msgsnd(clt->queue, &msg_buf, size, 0);
+    int status = msgsnd(server_queue, &msg_buf, size, 0);
     if (status < 0) {
         perror("msgsnd");
         return -1;
@@ -178,27 +183,42 @@ send_control_response(Client* clt, ControlResponse cres) {
     return 0;
 }
 
+int
+get_queue(key_t key) {
+    int queue = msgget(key, 0777 | IPC_CREAT);
+    if (queue < 0) {
+        queue = msgget(key, 0644);
+        if (queue < 0) {
+            perror("get_queue > msgget");
+        }
+    }
+
+    return queue;
+}
+
 Client*
 register_client(int uid, char name[], char queuepath[]) {
     printf("Inside register_client\n");
     if (find_client_by_id(uid) != NULL) {
         printf("Client already exists\n");
         Client* clt = find_client_by_id(uid);
-        sprintf(clt->name, "%s", name);
-        sprintf(clt->queue_path, "%s", queuepath);
         return clt;
     }
 
     printf("Creating new client\n");
-    key_t key = ftok(queuepath, 0);
-    printf("ckey=%d\n", key);
-    int queue = msgget(key, 0777 | IPC_CREAT);
+    append_trailing_slash(queuepath);
+
+    char control_qpath[1024], private_qpath[1024], group_qpath[1024];
+    strcpy(control_qpath, queuepath); strcat(control_qpath, "control.queue");
+    printf("control queue = %s\n", control_qpath);
+    
+    
+    key_t control_key = ftok(control_qpath, 0);
+
+    int queue = get_queue(control_key);
     if (queue < 0) {
-        perror("msgget");
         return NULL;
     }
-
-    printf("Connected to the client's main queue\n");
 
     Client* client = new_client(uid, name, queuepath);
     client->queue = queue;
@@ -216,16 +236,6 @@ register_client(int uid, char name[], char queuepath[]) {
 
 int
 join_group(Group* grp, Client* clt) {
-    key_t key = ftok(clt->queue_path, grp->gid+1);
-    int grp_queue = msgget(key, 0664 | IPC_CREAT);
-    if (grp_queue < 0) {
-        perror("msgget");
-        return -1;
-    }
-
-    // Add group to client data structure
-    clt->groups[clt->num_groups][0] = grp->gid;
-    clt->groups[clt->num_groups][1] = grp_queue;
     clt->num_groups = clt->num_groups + 1;
 
     // Add client to group data structure
@@ -240,7 +250,7 @@ Group*
 create_group(char name[], Client* creator) {
     // Create Group struct and update relevant data structures
     Group* group = new_group(next_group_id++, name);
-    total_groups++;
+    groups[total_groups++] = group;
 
     int status = join_group(group, creator);
     if (status < 0) {
@@ -264,6 +274,7 @@ handle_group_send_msgs() {
             return (void*)-1;
         }
 
+        printf("Forwarding message to group\n");
         Group* grp = find_group_by_id(msg.dst);
         send_group_message(grp, msg);
     }
@@ -319,13 +330,19 @@ handle_queries() {
             return (void*)-1;
         }
 
+        printf("Received query. Finding src client\n");
+
         Client* src_client = find_client_by_id(query.src);
         QueryResponse res;
         res.mtype = QUERY_RESPONSE;
 
+        printf("Found client %s\n", src_client->name);
+
+        int send_at_end = 1;
+
         switch (query.query_type) {
         case QUERY_CLIENT:
-            if (strcmp(query.content, "__ALL__") != 0) {
+            if (strcmp(query.content, "_ALL_") != 0) {
                 Client* clt = find_client_by_name(query.content);
                 if (clt == NULL) {
                     res.status = STATUS_ERROR;
@@ -335,26 +352,38 @@ handle_queries() {
                 res.status = STATUS_OK;
             } 
             else {
-                char* result = get_all_clients_msg();
-                sprintf(res.content, "%s", result);
-                res.status = STATUS_OK;
+                for (int i = 0; i < total_clients; i++) {
+                    Client* clt = clients[i];
+                    sprintf(res.content, "name = %s | cid = %d", clt->name, clt->cid);
+                    res.status = STATUS_OK;
+                    send_query_response(src_client, res);
+                }
+                strcpy(res.content, "_END_");
             }
             break;
 
         case QUERY_GROUP:
-            if (strcmp(query.content, "__ALL__") != 0) {
+            printf("Group query\n");
+            if (strcmp(query.content, "_ALL_") != 0) {
+                printf("Looking for specific group: %s\n", query.content);
                 Group* grp = find_group_by_name(query.content);
                 if (grp == NULL) {
+                    printf("Didn't find a group\n");
                     res.status = STATUS_ERROR;
                     break;
                 }
                 sprintf(res.content, "%d", grp->gid);
+                printf("Found group with gid = %d\n", grp->gid);
                 res.status = STATUS_OK;
             }
             else {
-                char* result = get_all_groups_msg();
-                sprintf(res.content, "%s", result);
-                res.status = STATUS_OK;
+                for (int i = 0; i < total_groups; i++) {
+                    Group* grp = groups[i];
+                    sprintf(res.content, "name = %s | gid = %d", grp->name, grp->gid);
+                    res.status = STATUS_OK;
+                    send_query_response(src_client, res);
+                }
+                strcpy(res.content, "_END_");
             }
             break;
         
@@ -374,12 +403,14 @@ handle_control_msgs() {
     while (1) {
         ControlMessage cmsg;
         int size = sizeof(cmsg) - sizeof(cmsg.mtype);
-        printf("Expecting size=%d\n", size);
+        // printf("Expecting size=%d\n", size);
         int status = msgrcv(server_queue, (void*)&cmsg, size, CONTROL, 0);
         if (status < 0) {
             perror("msgrcv");
             return (void*)-1;
         }
+
+        // printf("whoopty\n");
 
         ControlResponse cres;
         cres.mtype = CONTROL_RESPONSE;
@@ -395,9 +426,13 @@ handle_control_msgs() {
         }
         
         case JOIN_GROUP: {
+            printf("Finding client\n");
             Client* clt = find_client_by_id(cmsg.src);
+            printf("Finding group\n");
             Group* grp = find_group_by_id(cmsg.gid);
+            printf("Joining group %s\n", grp->name);
             join_group(grp, clt);
+            printf("Joined group\n");
             cres.status = STATUS_OK;
             break;
         }
@@ -429,7 +464,8 @@ handle_control_msgs() {
 
 int
 main() {
-    key_t key = ftok("server.queue", 1);
+    init_dirs();
+    key_t key = ftok("/tmp/simplemsg/server.queue", 1);
     server_queue = msgget(key, 0777 | IPC_CREAT);
     if (server_queue < 0) {
         printf("Failed to create server queue!\n");

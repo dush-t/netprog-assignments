@@ -3,52 +3,80 @@
 #include <stdlib.h>
 #include <sys/ipc.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/msg.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 #include <fcntl.h>
+#include <pwd.h>
 
 #include "message.h"
+
+#define MESSAGE_TYPE_GROUP 1
+#define MESSAGE_TYPE_CLIENT 2
 
 char server_queue_path[1024];
 char client_queue_path[1024];
 char client_name[1024];
 
 int server_queue;
-int client_queue;
+int client_queue, group_queue, private_queue;
 
+int recvtype;
 
+int
+get_autodelete_val(char pair[]) {
+    strtok(pair, "=");
+    char* val = strtok(NULL, "=");
+    return atoi(val);
+}
+
+char*
+get_username() {
+    struct passwd *pws;
+    pws = getpwuid(getuid());
+    return pws->pw_name;
+}
+
+int
+get_queue(key_t key) {
+    int queue = msgget(key, 0777 | IPC_CREAT);
+    if (queue < 0) {
+        queue = msgget(key, 0644);
+        printf("queue = %d\n", queue);
+    }
+
+    return queue;
+}
+
+int try_init_dir(char dir[]) {
+    strcat(dir, "/.simplemsg");
+    int status = mkdir(dir, 0777);
+    if (status == -1) {
+        return 0;
+    }
+
+    char control[1024], private[1024], group[1024];
+    strcpy(control, dir); strcat(control, "/control.queue");
+    int fd = open(control, 0777); close(fd);
+
+    return 0;
+}
 
 int
 init_connection() {
-    char* squeue_env = getenv("SERVER_QUEUE_PATH");
-    char* cqueue_env = getenv("CLIENT_QUEUE_PATH");
-    if (squeue_env == NULL) {
-        printf("SERVER_QUEUE_PATH env var not set.\nEnter server queue path: ");
-        scanf(" %s", server_queue_path);
-    } else {
-        strcpy(server_queue_path, squeue_env);
-    }
-    if (cqueue_env == NULL) {
-        printf("CLIENT_QUEUE_PATH env var not set. Creating a queue file.\n");
-        sprintf(client_queue_path, "./%s.%lu.queue", client_name, (unsigned long) time(NULL));
-        if (creat(client_queue_path, 0777) == -1) {
-            printf("Error while creating client queue. Exiting.\n");
-            return -1;
-        } else {
-            printf("Client queue created at %s\n", client_queue_path);
-        }
-    } else {
-        strcpy(client_queue_path, cqueue_env);
-    }
+    char target_dir[1024];
+    strcpy(target_dir, getenv("HOME"));
+    try_init_dir(target_dir);
+    char* homedir = getenv("HOME");
 
-    printf("%s\n", client_queue_path);
+    char control[1024], private[1024], group[1024];
+    sprintf(client_queue_path, "%s/.simplemsg/control.queue", homedir);
 
-    key_t skey = ftok(server_queue_path, 1);
-    if (skey < 0) {
-        perror("ftok: while getting server queue key");
-        return -1;
-    }
+    // printf("%s\n", client_queue_path);
+
+    key_t skey = ftok("/tmp/simplemsg/server.queue", 1);
     server_queue = msgget(skey, 0777 | IPC_CREAT);
     if (server_queue < 0) {
         perror("msgget");
@@ -56,14 +84,16 @@ init_connection() {
     }
 
     key_t ckey = ftok(client_queue_path, 0);
-    if (ckey < 0) {
-        perror("ftok: while getting client queue key");
-        return -1;
-    }
-    printf("ckey=%d\n", ckey);
+    
+    // if (ckey == -1) {
+    //     perror("ftok");
+    //     return -1;
+    // }
+    // printf("ckey=%d\n", ckey);
 
-    client_queue = msgget(ckey, 0777 | IPC_CREAT);
-    if (client_queue < 0) {
+    client_queue = get_queue(ckey);
+    // printf("Client queue = %d\n", client_queue);
+    if (client_queue < 0 || group_queue < 0 || private_queue < 0) {
         perror("msgget");
         return -1;
     }
@@ -75,7 +105,7 @@ init_connection() {
 
 int
 register_self(char name[], char queuepath[]) {
-    printf("Registering client as %s\n", name);
+    // printf("Registering client as %s\n", name);
 
     ControlMessage cmsg;
     cmsg.mtype = CONTROL;
@@ -93,7 +123,7 @@ register_self(char name[], char queuepath[]) {
         return -1;
     }
 
-    printf("Sent register control message\n");
+    // printf("Sent register control message\n");
 
     ControlResponse cres;
     int cres_size = sizeof(cres) - sizeof(long);
@@ -105,11 +135,11 @@ register_self(char name[], char queuepath[]) {
     }
 
     if (cres.status != STATUS_OK) {
-        printf("Error in registration. Aborting.\n");
+        printf("Error in initialization. Aborting.\n");
         return -1;
     }
 
-    printf("Registration successful!\n");
+    // printf("Registration successful!\n");
     return 0;
 }
 
@@ -146,10 +176,44 @@ int get_gid(char group_name[]) {
     }
 
     int gid = atoi(qres.content);
-    printf("Found group. Gid = %d", gid);
+    printf("Found group. Gid = %d\n", gid);
     return gid;
 }
 
+int get_cid(char client_name[]) {
+    printf("Finding user with name: %s\n", client_name);
+
+    QueryRequest query;
+    query.mtype = QUERY_REQUEST;
+    query.query_type = QUERY_CLIENT;
+    query.src = getuid();
+    strcpy(query.content, client_name);
+    int qsize = sizeof(query) - sizeof(long);
+    int qstat = msgsnd(server_queue, &query, qsize, 0);
+    if (qstat < 0) {
+        perror("msgsnd");
+        printf("Unable to send client query\n");
+        return -1;
+    }
+
+    QueryResponse qres;
+    int qres_size = sizeof(qres) - sizeof(long);
+    int gstat = msgrcv(client_queue, &qres, qres_size, QUERY_RESPONSE, 0);
+    if (gstat < 0) {
+        perror("msgrcv");
+        printf("Unable to receive group query response\n");
+        return -1;
+    }
+
+    if (qres.status == STATUS_ERROR) {
+        printf("Error resolving query: %s", qres.content);
+        return -1;
+    }
+
+    int cid = atoi(qres.content);
+    printf("Found client. Cid = %d\n", cid);
+    return cid;
+}
 
 
 int 
@@ -162,6 +226,7 @@ join_group(char group_name[]) {
         return -1;
     }
 
+    printf("Found group with gid = %d\n", gid);
     ControlMessage cmsg;
     cmsg.mtype = CONTROL;
     cmsg.action = JOIN_GROUP;
@@ -176,20 +241,20 @@ join_group(char group_name[]) {
         return -1;
     }
 
+    printf("Sent group join request\n");
+
     ControlResponse cres;
     size = sizeof(cres) - sizeof(long);
-    status = msgrcv(client_queue, &cres, size, CONTROL, 0);
+    status = msgrcv(client_queue, &cres, size, CONTROL_RESPONSE, 0);
     if (status < 0) {
         perror("msgrcv");
         printf("Unable to receive response for group join request\n");
         return -1;
     }
 
-    printf("Joined group %s with id %d\n", group_name, gid);
+    printf("Successfully joined group %s with id %d\n", group_name, gid);
     return gid;
 }
-
-
 
 int
 create_group(char group_name[]) {
@@ -224,34 +289,177 @@ create_group(char group_name[]) {
     }
 
     int gid = cres.gid;
-    printf("Successfully created new group %s with gid %d", group_name, gid);
+    printf("Successfully created new group %s with gid %d\n", group_name, gid);
     return gid;
 }
 
+void*
+handle_messages() {
+    int mtype = getuid() + 5000;
+    while (1) {
+        Message msg;
+        int size = sizeof(msg) - sizeof(long); 
+        int status = msgrcv(server_queue, (void*)&msg, size, mtype, 0);
+        if (status < 0) {
+            perror("handle_messages > msgrcv");
+            return NULL;
+        }
+
+        if (msg.auto_delete > 0) {
+            long tstamp = (long)time(NULL);
+            if (tstamp - msg.timestamp > msg.auto_delete) {
+                continue;
+            }
+        }
+
+        if (msg.protocol == GROUP_MESSAGE) {
+            msg.mtype = 5000 + msg.dst;
+            int status = msgsnd(client_queue, &msg, size, 0);
+            if (status < 0) {
+                perror("handle_messages > GROUP_MESSAGE msgsnd");
+                return NULL;
+            }
+        }
+        else if (msg.protocol == CLIENT_MESSAGE) {
+            msg.mtype = 10000 + msg.src;
+            int status = msgsnd(client_queue, &msg, size, 0);
+            if (status < 0) {
+                perror("handle_messages > CLIENT_MESSAGE msgsnd");
+                return NULL;
+            }
+        }
+    }
+}
+
+int
+start_message_send_loop(char name[], int type, int autodelete) {
+    int mtype, dst;
+    if (type == MESSAGE_TYPE_CLIENT) {
+        mtype = CLIENT_MESSAGE;
+        dst = get_cid(name);
+    }
+    else if (type == MESSAGE_TYPE_GROUP) {
+        mtype = GROUP_MESSAGE;
+        dst = get_gid(name);
+    }
+
+    long auto_delete = -1;
+
+    while (1) {
+        Message msg;
+        msg.protocol = (int)mtype;
+        msg.src = getuid();
+        msg.dst = dst;
+        msg.auto_delete = autodelete;
+        msg.timestamp = (long)time(NULL);
+        strcpy(msg.src_name, client_name);
+        fgets(msg.content, sizeof(msg.content), stdin);
+
+        int msgsize = sizeof(msg) - sizeof(long);
+        if (type == MESSAGE_TYPE_CLIENT) {
+            msg.mtype = dst + 10000;
+            int status = msgsnd(client_queue, (void*)&msg, msgsize, 0);
+            if (status < 0) {
+                perror("msgsnd");
+                printf("Failed to send message to self-queue\n");
+                return -1;
+            }
+        }
+
+        msg.mtype = mtype;
+        int status = msgsnd(server_queue, (void*)(&msg), msgsize, 0);
+        if (status < 0) {
+            perror("msgsnd");
+            printf("Unable to send message. Exiting\n");
+            return -1;
+        }
+        printf("Message sent\n");
+    }
+
+    return 0;
+}
+
+int
+start_message_rcv_loop(char name[], int type) {
+    int mtype;
+    char queue_path[1024];
+    
+    recvtype = type;
+    pthread_t router_thread;
+
+    if (type == MESSAGE_TYPE_CLIENT) {
+        mtype = get_cid(name) + 10000;
+    }
+    else if (type == MESSAGE_TYPE_GROUP) {
+        mtype = get_gid(name) + 5000;
+    }
+
+    pthread_create(&router_thread, NULL, handle_messages, NULL);
+
+    printf("Listening for messages, press Ctrl+C to stop\n");
+
+    while (1) {
+        Message msg;
+        int size = sizeof(msg) - sizeof(long);
+        int status = msgrcv(client_queue, (void*)&msg, size, mtype, 0);
+        if (status < 0) {
+            perror("msgrcv");
+            return -1;
+        }
+        time_t tstamp = (time_t)msg.timestamp;
+        struct tm tm = *localtime(&tstamp);
+        printf("[%s\t at %02d:%02d] %s", msg.src_name, tm.tm_hour, tm.tm_min, msg.content);
+    }
+
+    return 0;
+}
+
+int
+list_query(int type) {
+    QueryRequest query;
+    query.mtype = QUERY_REQUEST;
+    query.query_type = type;
+    query.src = getuid();
+    strcpy(query.content, "_ALL_");
+    int qsize = sizeof(query) - sizeof(long);
+    int qstat = msgsnd(server_queue, &query, qsize, 0);
+    if (qstat < 0) {
+        perror("msgsnd");
+        printf("Unable to send group query\n");
+        return -1;
+    }
+
+    QueryResponse qres;
+    int qres_size = sizeof(qres) - sizeof(long);
+    while (1) {
+        int gstat = msgrcv(client_queue, &qres, qres_size, QUERY_RESPONSE, 0);
+        if (gstat < 0) {
+            perror("list_query > msgrcv");
+            return -1;
+        }
+        if (strcmp(qres.content, "_END_") == 0) {
+            break;
+        }
+        printf("%s\n", qres.content);
+    }
+
+    return 0;
+}
 
 
 int
 main(int argc, char** argv) {
-    char *client_name_env = getenv("CLIENT_NAME");
-    if (client_name_env == NULL) {
-        printf("CLIENT_NAME env var not set.\nEnter client name: ");
-        scanf(" %s", client_name);
-    } else {
-        strcpy(client_name, getenv("CLIENT_NAME"));
-    }
-    
-    int status = init_connection();
+    strcpy(client_name, get_username());
+    init_connection();
+    char target_dir[1024];
+    sprintf(target_dir, "%s/.simplemsg", getenv("HOME"));
+    int status = register_self(client_name, target_dir);
     if (status < 0) {
-        printf("Error initialising connection.\n");
-        return -1;
-    }
-    status = register_self(client_name, client_queue_path);
-    if (status < 0) {
-        printf("Error registering client.\n");
+        printf("Error initializing.\n");
         return -1;
     }
 
-    if (argc == 3 && strcmp(argv[1], "join-group") == 0) {
+    if (strcmp(argv[1], "join-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = join_group(group_name);
@@ -262,7 +470,7 @@ main(int argc, char** argv) {
         return 0;
     }
 
-    if (argc == 3 && strcmp(argv[1], "create-group") == 0) {
+    if (strcmp(argv[1], "create-group") == 0) {
         char group_name[1024];
         strcpy(group_name, argv[2]);
         int gid = create_group(group_name);
@@ -271,5 +479,54 @@ main(int argc, char** argv) {
             return -1;
         }
         return 0;
+    }
+
+    if (strcmp(argv[1], "read") == 0) {
+        if (argc < 4) {
+            printf("Usage: ./client read ['group' | 'client'] [name]\n");
+            return -1;
+        }
+
+        char* name = argv[3];
+        if (strcmp(argv[2], "group") == 0) {
+            return start_message_rcv_loop(name, MESSAGE_TYPE_GROUP);
+        }
+        else {
+            return start_message_rcv_loop(name, MESSAGE_TYPE_CLIENT);
+        }
+    }
+
+    if (strcmp(argv[1], "send-to") == 0) {
+        if (argc < 4) {
+            printf("Usage: ./client send-to ['group' | 'client'] [name]\n");
+            return -1;
+        }
+
+        char* name = argv[3];
+        int autodelete = -1;
+        if (argc == 5) {
+            autodelete = get_autodelete_val(argv[4]);
+        }
+        if (strcmp(argv[2], "group") == 0) {
+            return start_message_send_loop(name, MESSAGE_TYPE_GROUP, autodelete);
+        }
+        else {
+            return start_message_send_loop(name, MESSAGE_TYPE_CLIENT, autodelete);
+        }
+    }
+
+    if (strcmp(argv[1], "list") == 0) {
+        if (argc < 3) {
+            printf("Usage: ./client list ['group' | 'client']\n");
+            return -1;
+        }
+
+        if (strcmp(argv[2], "groups") == 0 || strcmp(argv[2], "group") == 0) {
+            list_query(QUERY_GROUP);
+        }
+        else {
+            list_query(QUERY_CLIENT);
+        }
+        
     }
 }

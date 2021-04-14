@@ -32,7 +32,8 @@ typedef struct Messages {
     long auto_delete;
     long timestamp;
     int  status;
-    char content[10 * MAX_LEN];
+    char src_name[MAX_LEN];
+    char content[2 * MAX_LEN];
 } Message;
 
 typedef struct QueryRequests {
@@ -46,7 +47,7 @@ typedef struct QueryRequests {
 typedef struct QueryResponses {
     long  mtype;
     int status;
-    char content[MAX_LEN * 10];
+    char content[MAX_LEN * 2];
 } QueryResponse;
 
 typedef struct ControlMessages {

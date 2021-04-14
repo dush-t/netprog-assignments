@@ -1,5 +1,5 @@
 server:
-	gcc -o server.out server.c
+	gcc -pthread server.c -o server.out
 
 client:
-	gcc -o client.out client.c
+	gcc -pthread client.c -o client.out
