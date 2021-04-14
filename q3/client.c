@@ -25,6 +25,13 @@ int client_queue, group_queue, private_queue;
 
 int recvtype;
 
+int
+get_autodelete_val(char pair[]) {
+    strtok(pair, "=");
+    char* val = strtok(NULL, "=");
+    return atoi(val);
+}
+
 char*
 get_username() {
     struct passwd *pws;
@@ -298,6 +305,13 @@ handle_messages() {
             return NULL;
         }
 
+        if (msg.auto_delete > 0) {
+            long tstamp = (long)time(NULL);
+            if (tstamp - msg.timestamp > msg.auto_delete) {
+                continue;
+            }
+        }
+
         if (msg.protocol == GROUP_MESSAGE) {
             msg.mtype = 5000 + msg.dst;
             int status = msgsnd(client_queue, &msg, size, 0);
@@ -318,7 +332,7 @@ handle_messages() {
 }
 
 int
-start_message_send_loop(char name[], int type) {
+start_message_send_loop(char name[], int type, int autodelete) {
     int mtype, dst;
     if (type == MESSAGE_TYPE_CLIENT) {
         mtype = CLIENT_MESSAGE;
@@ -336,7 +350,7 @@ start_message_send_loop(char name[], int type) {
         msg.protocol = (int)mtype;
         msg.src = getuid();
         msg.dst = dst;
-        msg.auto_delete = -1;
+        msg.auto_delete = autodelete;
         msg.timestamp = (long)time(NULL);
         strcpy(msg.src_name, client_name);
         fgets(msg.content, sizeof(msg.content), stdin);
@@ -489,11 +503,15 @@ main(int argc, char** argv) {
         }
 
         char* name = argv[3];
+        int autodelete = -1;
+        if (argc == 5) {
+            autodelete = get_autodelete_val(argv[4]);
+        }
         if (strcmp(argv[2], "group") == 0) {
-            return start_message_send_loop(name, MESSAGE_TYPE_GROUP);
+            return start_message_send_loop(name, MESSAGE_TYPE_GROUP, autodelete);
         }
         else {
-            return start_message_send_loop(name, MESSAGE_TYPE_CLIENT);
+            return start_message_send_loop(name, MESSAGE_TYPE_CLIENT, autodelete);
         }
     }
 

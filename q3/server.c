@@ -21,8 +21,6 @@ typedef struct Clients {
     char name[MAX];
     char queue_path[MAX];
     int queue;
-    int private_queue;
-    int group_queue;
     int num_groups;
     int groups[MAX_GROUPS][2];
 } Client;
@@ -123,13 +121,6 @@ find_client_by_name(char name[]) {
     }
 
     return NULL;
-}
-
-
-int
-get_client_queue_for_group(Client* clt, Group* grp) {
-    int num_grps = clt->num_groups;
-    return clt->group_queue;
 }
 
 
