@@ -1,2 +1,4 @@
 *.out
 **/*.queue
+.vscode
+**/*.DS_Store
