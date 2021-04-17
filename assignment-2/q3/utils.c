@@ -122,12 +122,21 @@ void parseCommand(char *cmd, struct command *command_obj)
 
     command_obj->cmd_type.init_poll_cmd = init_poll_cmd;
   }
+  else if (strcmp(cmd_name, LIST_GROUPS_STR) == 0)
+  {
+    command_obj->cmd_name = LIST_GROUPS;
+  }
+  else if (strcmp(cmd_name, HELP_CMD_STR) == 0)
+  {
+    command_obj->cmd_name = HELP_CMD;
+  }
   else if (strcmp(cmd_name, EXIT_CMD_STR) == 0)
   {
     command_obj->cmd_name = EXIT_CMD;
   }
   else
   {
+    // TO DO
   }
 }
 
@@ -188,6 +197,18 @@ void printCommand(struct command *command_obj)
     break;
   }
 
+  case LIST_GROUPS:
+  {
+    printf("list-groups\n");
+    break;
+  }
+
+  case HELP_CMD:
+  {
+    printf("help\n");
+    break;
+  }
+
   case EXIT_CMD:
   {
     printf("exit\n");
@@ -198,4 +219,163 @@ void printCommand(struct command *command_obj)
     printf("Command not recognized.\n");
     break;
   }
+}
+
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port, bool is_admin)
+{
+  // TO DO: check that group does not already exist
+  struct multicast_group *grp = (struct multicast_group *)calloc(1, sizeof(struct multicast_group));
+  if (grp == NULL)
+  {
+    perror("[initMulticastGroup] calloc");
+    return NULL;
+  }
+
+  memset(grp, 0, sizeof(struct multicast_group));
+
+  strcpy(grp->name, name);
+  strcpy(grp->ip, ip);
+  grp->port = port;
+  grp->is_admin = is_admin;
+
+  grp->next = NULL;
+  grp->prev = NULL;
+
+  struct sockaddr_in send_addr, recv_addr;
+  memset(&send_addr, 0, sizeof(send_addr));
+  memset(&recv_addr, 0, sizeof(recv_addr));
+  int send_fd, recv_fd;
+
+  send_addr.sin_family = AF_INET;
+  send_addr.sin_addr.s_addr = inet_addr(ip);
+  send_addr.sin_port = htons(port);
+
+  recv_addr.sin_family = AF_INET;
+  recv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  recv_addr.sin_port = htons(port);
+
+  recv_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (recv_fd == -1)
+  {
+    perror("[initMulticastGroup] socket()");
+    return NULL;
+  }
+
+  int ok = 1;
+  if (setsockopt(recv_fd, SOL_SOCKET, SO_REUSEADDR, &ok, sizeof(ok)) < 0)
+  {
+    perror("[initMulticastGroup] setsockopt()");
+    return NULL;
+  }
+
+  if (bind(recv_fd, (struct sockaddr *)&recv_addr, (socklen_t)sizeof(recv_addr)) == -1)
+  {
+    perror("[initMulticastGroup] bind()");
+    return NULL;
+  }
+
+  send_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (send_fd == -1)
+  {
+    perror("[initMulticastGroup] socket()");
+    return NULL;
+  }
+
+  // TO DO: multicast loop option??
+
+  grp->recv_addr = recv_addr;
+  grp->recv_fd = recv_fd;
+  grp->send_addr = send_addr;
+  grp->send_fd = send_fd;
+
+  return grp;
+}
+
+int insertMulticastGroup(struct multicast_group_list *list, struct multicast_group *group)
+{
+  if (list == NULL || group == NULL)
+  {
+    return -1;
+  }
+  if (list->count == 0)
+  {
+    list->head = group;
+    list->tail = group;
+  }
+  else
+  {
+    list->tail->next = group;
+    group->prev = list->tail;
+    list->tail = group;
+  }
+  list->count += 1;
+  return 0;
+}
+
+int removeMulticastGroup(struct multicast_group_list *list, struct multicast_group *group)
+{
+  if (list == NULL || group == NULL)
+  {
+    return -1;
+  }
+
+  struct multicast_group *prev = NULL;
+  struct multicast_group *curr = list->head;
+  int count = list->count;
+
+  while (count--)
+  {
+    if (memcmp(curr, group, sizeof(multicast_group)) == 0)
+      break;
+
+    prev = curr;
+    curr = curr->next;
+  }
+
+  if (curr == NULL)
+  {
+    return -1;
+  }
+
+  if (prev == NULL)
+  {
+    list->head = curr->next;
+    if (curr->next)
+      curr->next->prev = NULL;
+  }
+  else
+  {
+    prev->next = curr->next;
+    if (curr->next)
+      curr->next->prev = prev;
+  }
+
+  list->count -= 1;
+  return 0;
+}
+
+int listGroups(struct multicast_group_list *list)
+{
+  if (list == NULL)
+    return -1;
+
+  if (list->count == 0)
+  {
+    printf("\nConnected to 0 groups.\n");
+    return 0;
+  }
+
+  printf("\nConnected to %d group(s).\n", list->count);
+  struct multicast_group *curr = list->head;
+  for (int i = 0; i < list->count; i++)
+  {
+    printf("%d. %s: %s %d\n", i + 1, curr->name, curr->ip, curr->port);
+  }
+
+  return 0;
+}
+
+int max(int num1, int num2)
+{
+  return (num1 > num2) ? num1 : num2;
 }

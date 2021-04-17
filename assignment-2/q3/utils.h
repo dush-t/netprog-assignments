@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #define GROUP_NAME_LEN 30
 #define IP_LEN 20
@@ -18,7 +19,9 @@
 #define FIND_GROUPS_STR "find-groups"
 #define SEND_MESSAGE_STR "send-message"
 #define INIT_POLL_STR "init-poll"
+#define LIST_GROUPS_STR "list-groups\n"
 #define EXIT_CMD_STR "exit\n"
+#define HELP_CMD_STR "help\n"
 
 enum cmds
 {
@@ -28,6 +31,8 @@ enum cmds
   FIND_GROUPS,
   SEND_MESSAGE,
   INIT_POLL,
+  LIST_GROUPS,
+  HELP_CMD,
   EXIT_CMD
 };
 
@@ -91,16 +96,31 @@ struct multicast_group
   bool is_admin;
   multicast_group *next;
   multicast_group *prev;
+  int send_fd;
+  struct sockaddr_in send_addr;
+  int recv_fd;
+  struct sockaddr_in recv_addr;
 };
 
-struct multicast_groups
+struct multicast_group_list
 {
   struct multicast_group *head;
+  struct multicast_group *tail;
   int count;
 };
 
 void parseCommand(char *cmd, struct command *command_obj);
 
 void printCommand(struct command *command_obj);
+
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port, bool is_admin);
+
+int insertMulticastGroup(struct multicast_group_list *list, struct multicast_group *group);
+
+int removeMulticastGroup(struct multicast_group_list *list, struct multicast_group *group);
+
+int listGroups(struct multicast_group_list *list);
+
+int max(int num1, int num2);
 
 #endif
