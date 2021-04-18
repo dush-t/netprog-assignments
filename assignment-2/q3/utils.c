@@ -1,8 +1,23 @@
 #include "utils.h"
 
-void parseCommand(char *cmd, struct command *command_obj)
+struct command *parseCommand(char *raw_cmd)
 {
+  struct command *command_obj = (struct command *)calloc(1, sizeof(struct command));
+  if (command_obj == NULL)
+  {
+    perror("calloc()");
+    return NULL;
+  }
   memset(command_obj, 0, sizeof(struct command));
+
+  /* copy command and remove last character (\n) */
+  char cmd[COMMAND_LEN];
+  memset(&cmd, '\0', COMMAND_LEN);
+
+  int cmd_len = strlen(raw_cmd);
+  if (raw_cmd[cmd_len - 1] == '\n')
+    cmd_len--;
+  strncpy(cmd, raw_cmd, cmd_len);
 
   char *cmd_name = strtok(cmd, " ");
   if (strcmp(cmd_name, CREATE_GROUP_STR) == 0)
@@ -15,8 +30,8 @@ void parseCommand(char *cmd, struct command *command_obj)
 
     if (grp_name == NULL || ip == NULL || port == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
     strcpy(create_grp_cmd.grp_name, grp_name);
     strcpy(create_grp_cmd.ip, ip);
@@ -33,8 +48,8 @@ void parseCommand(char *cmd, struct command *command_obj)
 
     if (ip == NULL || port == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
     strcpy(join_grp_cmd.ip, ip);
     join_grp_cmd.port = atoi(port);
@@ -48,8 +63,8 @@ void parseCommand(char *cmd, struct command *command_obj)
     char *grp_name = strtok(NULL, " ");
     if (grp_name == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
     strcpy(leave_grp_cmd.grp_name, grp_name);
 
@@ -63,8 +78,8 @@ void parseCommand(char *cmd, struct command *command_obj)
     char *query = strtok(NULL, " ");
     if (query == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
     strcpy(find_grp_cmd.query, query);
 
@@ -79,8 +94,8 @@ void parseCommand(char *cmd, struct command *command_obj)
     char *msg = strtok(NULL, "\"");
     if (grp_name == NULL || msg == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
 
     strcpy(send_msg_cmd.grp_name, grp_name);
@@ -99,8 +114,8 @@ void parseCommand(char *cmd, struct command *command_obj)
     printf("\ngrp_name: %s, que: %s, option_cnt: %s\n", grp_name, que, option_cnt);
     if (grp_name == NULL || que == NULL || option_cnt == NULL)
     {
-      command_obj = NULL;
-      return;
+      free(command_obj);
+      return NULL;
     }
     int cnt = atoi(option_cnt);
     init_poll_cmd.option_cnt = cnt;
@@ -114,8 +129,8 @@ void parseCommand(char *cmd, struct command *command_obj)
 
       if (opt == NULL)
       {
-        command_obj = NULL;
-        return;
+        free(command_obj);
+        return NULL;
       }
       strcpy(init_poll_cmd.options[i], opt);
     }
@@ -136,8 +151,11 @@ void parseCommand(char *cmd, struct command *command_obj)
   }
   else
   {
-    // TO DO
+    free(command_obj);
+    return NULL;
   }
+
+  return NULL;
 }
 
 void printCommand(struct command *command_obj)
@@ -378,4 +396,156 @@ int listGroups(struct multicast_group_list *list)
 int max(int num1, int num2)
 {
   return (num1 > num2) ? num1 : num2;
+}
+
+char *serialize(struct message *msg, int *len)
+{
+  char *res = (char *)calloc(PACKET_SIZE, sizeof(char));
+  if (res == NULL)
+  {
+    perror("calloc");
+    return NULL;
+  }
+  memset(res, '\0', PACKET_SIZE);
+
+  int offset = 0;
+  memcpy(res + offset, &(msg->msg_type), sizeof(enum message_type));
+  offset += sizeof(enum message_type);
+
+  switch (msg->msg_type)
+  {
+  case SIMPLE_MSG:
+  {
+    int sz = sizeof(struct simple_msg);
+    memcpy(res + offset, &(msg->payload.simple_msg), sz);
+    offset += sz;
+    break;
+  }
+
+  case SEARCH_GROUP_REQ:
+  {
+    int sz = sizeof(struct search_grp_req);
+    memcpy(res + offset, &(msg->payload.search_grp_req), sz);
+    offset += sz;
+    break;
+  }
+
+  case SEARCH_GROUP_REPLY:
+  {
+    int sz = sizeof(struct search_grp_reply);
+    memcpy(res + offset, &(msg->payload.search_grp_reply), sz);
+    offset += sz;
+    break;
+  }
+
+  default:
+    perror("Message type not recognized.");
+    return NULL;
+    break;
+  }
+
+  *len = offset;
+  return res;
+}
+
+struct message *deserialize(char *msg)
+{
+  struct message *msg_obj = (struct message *)calloc(1, sizeof(struct message));
+
+  int msg_type;
+  int offset = 0;
+  memcpy(&msg_type, msg + offset, sizeof(int));
+  offset += sizeof(int);
+
+  msg_obj->msg_type = msg_type;
+
+  switch (msg_type)
+  {
+  case SIMPLE_MSG:
+  {
+    memcpy(&(msg_obj->payload.simple_msg), msg + offset, sizeof(struct simple_msg));
+    break;
+  }
+
+  case SEARCH_GROUP_REQ:
+  {
+    memcpy(&(msg_obj->payload.search_grp_req), msg + offset, sizeof(struct search_grp_req));
+    break;
+  }
+
+  case SEARCH_GROUP_REPLY:
+  {
+    memcpy(&(msg_obj->payload.search_grp_reply), msg + offset, sizeof(struct search_grp_reply));
+    break;
+  }
+
+  default:
+    perror("Message type not recognized.");
+    return NULL;
+    break;
+  }
+
+  return msg_obj;
+}
+
+int joinMulticastGroup(struct multicast_group *grp, struct multicast_group_list *mc_list)
+{
+  struct ip_mreq mreq;
+  mreq.imr_multiaddr.s_addr = inet_addr(grp->ip);
+  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+
+  if (setsockopt(grp->recv_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == -1)
+  {
+    perror("setsockopt()");
+    return -1;
+  }
+
+  if (insertMulticastGroup(mc_list, grp) == -1)
+  {
+    perror("insertMulticastGroup()");
+    return -1;
+  }
+
+  return 0;
+}
+
+int leaveMulticastGroup(struct multicast_group *grp, struct multicast_group_list *mc_list)
+{
+  struct ip_mreq mreq;
+  mreq.imr_multiaddr.s_addr = inet_addr(grp->ip);
+  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+
+  if (setsockopt(grp->recv_fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) == -1)
+  {
+    perror("setsockopt()");
+    return -1;
+  }
+
+  if (removeMulticastGroup(mc_list, grp) == -1)
+  {
+    perror("removeMulticastGroup()");
+    return -1;
+  }
+
+  return 0;
+}
+
+struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_list *mc_list)
+{
+  if (mc_list == NULL)
+  {
+    return NULL;
+  }
+
+  struct multicast_group *curr = mc_list->head;
+  while (curr)
+  {
+    if (strcmp(grp_name, curr->name) == 0)
+    {
+      return curr;
+    }
+    curr = curr->next;
+  }
+
+  return NULL;
 }

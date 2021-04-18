@@ -7,11 +7,13 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-#define GROUP_NAME_LEN 30
+#define GROUP_NAME_LEN 20
 #define IP_LEN 20
 #define MESSAGE_LEN 100
 #define NUM_OPTIONS 5
 #define COMMAND_LEN 1024
+#define MAX_GROUPS 5
+#define PACKET_SIZE 1024
 
 #define CREATE_GROUP_STR "create-group"
 #define JOIN_GROUP_STR "join-group"
@@ -19,9 +21,9 @@
 #define FIND_GROUPS_STR "find-groups"
 #define SEND_MESSAGE_STR "send-message"
 #define INIT_POLL_STR "init-poll"
-#define LIST_GROUPS_STR "list-groups\n"
-#define EXIT_CMD_STR "exit\n"
-#define HELP_CMD_STR "help\n"
+#define LIST_GROUPS_STR "list-groups"
+#define EXIT_CMD_STR "exit"
+#define HELP_CMD_STR "help"
 
 enum cmds
 {
@@ -109,7 +111,44 @@ struct multicast_group_list
   int count;
 };
 
-void parseCommand(char *cmd, struct command *command_obj);
+enum message_type
+{
+  SIMPLE_MSG,
+  SEARCH_GROUP_REQ,
+  SEARCH_GROUP_REPLY,
+  POLL_REQ,
+  POLL_REPLY
+};
+
+struct simple_msg
+{
+  char msg[MESSAGE_LEN];
+};
+struct search_grp_req
+{
+  char query[GROUP_NAME_LEN];
+};
+
+struct search_grp_reply
+{
+  int count;
+  char grp_name[MAX_GROUPS][GROUP_NAME_LEN];
+  char ip[MAX_GROUPS][IP_LEN];
+  int port[MAX_GROUPS];
+};
+
+struct message
+{
+  enum message_type msg_type;
+  union
+  {
+    struct simple_msg simple_msg;
+    struct search_grp_req search_grp_req;
+    struct search_grp_reply search_grp_reply;
+  } payload;
+};
+
+struct command *parseCommand(char *raw_cmd);
 
 void printCommand(struct command *command_obj);
 
@@ -122,5 +161,15 @@ int removeMulticastGroup(struct multicast_group_list *list, struct multicast_gro
 int listGroups(struct multicast_group_list *list);
 
 int max(int num1, int num2);
+
+char *serialize(struct message *, int *);
+
+struct message *deserialize(char *);
+
+int joinMulticastGroup(struct multicast_group *, struct multicast_group_list *);
+
+int leaveMulticastGroup(struct multicast_group *, struct multicast_group_list *);
+
+struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_list *mc_list);
 
 #endif
