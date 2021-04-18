@@ -14,6 +14,7 @@ void printCommands();
 void cleanupAndExit(char *err);
 void cleanup();
 int getMaxFd();
+void sigIntHandler(int sig_num);
 
 /* multicast group linked list */
 struct multicast_group_list *mc_list = NULL;
@@ -24,6 +25,9 @@ int broadcast_fd = -1;
 
 int main()
 {
+  /* cleanup on exit through SIGINT */
+  signal(SIGINT, sigIntHandler);
+
   printf("\n##### WELCOME TO GROUP CHAT APPLICATION #####\n");
   printCommands(); /* print available commands to user */
 
@@ -227,4 +231,14 @@ int getMaxFd()
   }
 
   return max_fd;
+}
+
+void sigIntHandler(int sig_num)
+{
+  if (sig_num != SIGINT)
+    cleanupAndExit("sigIntHandler()");
+
+  printf("\nExiting...\n");
+  cleanup();
+  exit(EXIT_SUCCESS);
 }
