@@ -53,8 +53,7 @@ struct create_grp_cmd
 
 struct join_grp_cmd
 {
-  char ip[IP_LEN];
-  int port;
+  char grp_name[GROUP_NAME_LEN];
 };
 
 struct leave_grp_cmd
@@ -101,7 +100,6 @@ struct multicast_group
   char name[GROUP_NAME_LEN];
   char ip[IP_LEN];
   int port;
-  bool is_admin;
   multicast_group *next;
   multicast_group *prev;
   int send_fd;
@@ -157,7 +155,7 @@ struct command *parseCommand(char *raw_cmd);
 
 void printCommand(struct command *command_obj);
 
-struct multicast_group *initMulticastGroup(char *name, char *ip, int port, bool is_admin);
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port);
 
 int insertMulticastGroup(struct multicast_group_list *list, struct multicast_group *group);
 

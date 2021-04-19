@@ -43,16 +43,14 @@ struct command *parseCommand(char *raw_cmd)
   {
     command_obj->cmd_name = JOIN_GROUP;
     struct join_grp_cmd join_grp_cmd;
-    char *ip = strtok(NULL, " ");
-    char *port = strtok(NULL, " ");
+    char *group_name = strtok(NULL, " ");
 
-    if (ip == NULL || port == NULL)
+    if (group_name == NULL)
     {
       free(command_obj);
       return NULL;
     }
-    strcpy(join_grp_cmd.ip, ip);
-    join_grp_cmd.port = atoi(port);
+    strcpy(join_grp_cmd.grp_name, group_name);
 
     command_obj->cmd_type.join_grp_cmd = join_grp_cmd;
   }
@@ -178,7 +176,7 @@ void printCommand(struct command *command_obj)
   case JOIN_GROUP:
   {
     struct join_grp_cmd cmd = command_obj->cmd_type.join_grp_cmd;
-    printf("join-group %s %d\n", cmd.ip, cmd.port);
+    printf("join-group %s\n", cmd.grp_name);
     break;
   }
 
@@ -239,7 +237,7 @@ void printCommand(struct command *command_obj)
   }
 }
 
-struct multicast_group *initMulticastGroup(char *name, char *ip, int port, bool is_admin)
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port)
 {
   // TO DO: check that group does not already exist
   struct multicast_group *grp = (struct multicast_group *)calloc(1, sizeof(struct multicast_group));
@@ -254,7 +252,6 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, bool 
   strcpy(grp->name, name);
   strcpy(grp->ip, ip);
   grp->port = port;
-  grp->is_admin = is_admin;
 
   grp->next = NULL;
   grp->prev = NULL;
@@ -379,7 +376,7 @@ int listGroups(struct multicast_group_list *list)
 
   if (list->count == 0)
   {
-    printf("\nConnected to 0 groups.\n");
+    printf("\nConnected to 0 groups.\n\n");
     return 0;
   }
 
@@ -388,8 +385,10 @@ int listGroups(struct multicast_group_list *list)
   for (int i = 0; i < list->count; i++)
   {
     printf("%d. %s: %s %d\n", i + 1, curr->name, curr->ip, curr->port);
+    curr = curr->next;
   }
 
+  printf("\n");
   return 0;
 }
 
@@ -606,7 +605,8 @@ struct message *findGroupRecv()
     return NULL;
   }
 
-  if (setsockopt(broadcast_fd, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int)) == -1) {
+  if (setsockopt(broadcast_fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1)
+  {
     perror("setsockopt()");
     return NULL;
   }
@@ -622,40 +622,41 @@ struct message *findGroupRecv()
     return NULL;
   }
 
+  printf("\n>> Finding group, please wait for %d seconds...\n\n", FIND_GROUP_TIMEOUT);
+
   fd_set find_grp_set;
-  for (;;)
+
+  FD_ZERO(&find_grp_set);
+  FD_SET(broadcast_fd, &find_grp_set);
+
+  struct timeval tv;
+  tv.tv_sec = FIND_GROUP_TIMEOUT;
+  tv.tv_usec = 0;
+
+  int nready = select(broadcast_fd + 1, &find_grp_set, NULL, NULL, &tv);
+  if (nready == 0)
   {
-    FD_ZERO(&find_grp_set);
-    FD_SET(broadcast_fd, &find_grp_set);
+    /* Time expired */
+    close(broadcast_fd);
+    return NULL;
+  }
 
-    struct timeval tv;
-    tv.tv_sec = FIND_GROUP_TIMEOUT;
-    tv.tv_usec = 0;
+  if (FD_ISSET(broadcast_fd, &find_grp_set))
+  {
+    struct sockaddr_in caddr;
+    int len = sizeof(caddr);
 
-    int nready = select(broadcast_fd + 1, &find_grp_set, NULL, NULL, &tv);
-    if (nready == 0)
+    int n = recvfrom(broadcast_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+
+    recv_msg = deserialize(buff);
+
+    /* ensure that this is a reply for FIND_GROUP */
+    if (recv_msg->msg_type != FIND_GROUP_REPLY)
     {
-      /* Time expired */
-      return NULL;
-    }
-
-    if (FD_ISSET(broadcast_fd, &find_grp_set))
-    {
-      struct sockaddr_in caddr;
-      int len = sizeof(caddr);
-
-      int n = recvfrom(broadcast_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
-
-      recv_msg = deserialize(buff);
-
-      /* ensure that this is a reply for FIND_GROUP */
-      if (recv_msg->msg_type != FIND_GROUP_REPLY)
-      {
-        recv_msg = NULL;
-      }
-      break;
+      recv_msg = NULL;
     }
   }
+
   close(broadcast_fd);
   return recv_msg;
 }

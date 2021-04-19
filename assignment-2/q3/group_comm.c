@@ -51,14 +51,27 @@ int main()
   {
     fd_set read_set;
     FD_ZERO(&read_set);
+
+    /* set fd to monitor */
     FD_SET(STDIN_FILENO, &read_set);
     FD_SET(broadcast_fd, &read_set);
+
+    if (mc_list != NULL && mc_list->count > 0)
+    {
+      struct multicast_group *curr = mc_list->head;
+      while (curr != NULL)
+      {
+        FD_SET(curr->recv_fd, &read_set);
+        curr = curr->next;
+      }
+    }
+
     int max_fd = getMaxFd();
 
     int nready = select(max_fd + 1, &read_set, NULL, NULL, NULL);
     if (nready == -1)
     {
-      // TO DO
+      cleanupAndExit("select()");
     }
 
     /* check if it is a broadcast message */
@@ -103,7 +116,6 @@ int main()
 
       /* free command buffer */
       free(cmd_buf);
-
       switch (cmd_obj->cmd_name)
       {
       case CREATE_GROUP:
@@ -111,7 +123,7 @@ int main()
         struct create_grp_cmd cmd = cmd_obj->cmd_type.create_grp_cmd;
 
         /* create multicast group */
-        struct multicast_group *mc_grp = initMulticastGroup(cmd.grp_name, cmd.ip, cmd.port, true);
+        struct multicast_group *mc_grp = initMulticastGroup(cmd.grp_name, cmd.ip, cmd.port);
         if (mc_grp == NULL)
         {
           printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
@@ -125,11 +137,58 @@ int main()
           break;
         }
 
-        /* add receive fd to read set to monitor it */
-        FD_SET(mc_grp->recv_fd, &read_set);
-        max_fd = max(max_fd, mc_grp->recv_fd);
-
         printf(">> Created group %s at %s:%d\n\n", mc_grp->name, mc_grp->ip, mc_grp->port);
+        break;
+      }
+
+      case JOIN_GROUP:
+      {
+        struct join_grp_cmd cmd = cmd_obj->cmd_type.join_grp_cmd;
+        printf("group name: %s\n", cmd.grp_name);
+        /* ensure that the group is not joined already */
+        if (findGroupByName(cmd.grp_name, mc_list) != NULL)
+        {
+          printf(">> Group %s already joined.\n\n", cmd.grp_name);
+          break;
+        }
+
+        /* send broacast message to find the group with given name */
+        struct message req_msg;
+        req_msg.msg_type = FIND_GROUP_REQ;
+        strcpy(req_msg.payload.find_grp_req.query, cmd.grp_name);
+
+        /* Send the broadcast message */
+        if (findGroupSend(&req_msg) == -1)
+        {
+          cleanupAndExit("findGroupSend()");
+        }
+
+        /* Receive reply */
+        struct message *reply_msg = findGroupRecv();
+        if (reply_msg == NULL)
+        {
+          printf(">> Error: No group found with name %s within %d seconds.\n\n", cmd.grp_name, FIND_GROUP_TIMEOUT);
+          break;
+        }
+
+        struct find_grp_reply find_grp_reply = reply_msg->payload.find_grp_reply;
+
+        /* create multicast group */
+        struct multicast_group *mc_grp = initMulticastGroup(find_grp_reply.grp_name, find_grp_reply.ip, find_grp_reply.port);
+        if (mc_grp == NULL)
+        {
+          printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
+          break;
+        }
+
+        /* insert multicast group into linked list */
+        if (joinMulticastGroup(mc_grp, mc_list) == -1)
+        {
+          printf(">> Error: [joinMulticastGroup] Could not join multicast group.\n\n");
+          break;
+        }
+
+        printf(">> Joined group %s (%s:%d).\n\n", find_grp_reply.grp_name, find_grp_reply.ip, find_grp_reply.port);
         break;
       }
 
@@ -227,14 +286,14 @@ void printCommands()
 {
   printf("\nAvailable commands:");
   printf("\n> create-group [GROUP_NAME] [GROUP_IP] [GROUP_PORT]");
-  printf("\n> join-group [GROUP_IP] [GROUP_PORT]");
+  printf("\n> join-group [GROUP_NAME]");
   printf("\n> leave-group [GROUP_NAME]");
   printf("\n> find-group [GROUP_NAME]");
   printf("\n> list-groups");
   printf("\n> send-message [GROUP_NAME] \"[MESSAGE]\"");
   printf("\n> init-poll [GROUP_NAME] \"[QUESTION]\" [OPTION_COUNT] \"[OPTION_1]\" \"[OPTION_2]\"...");
   printf("\n> help");
-  printf("\n> exit\n");
+  printf("\n> exit\n\n");
 }
 
 void errExit(char *err)
