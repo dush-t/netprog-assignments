@@ -2,3 +2,4 @@
 **/*.queue
 .vscode
 **/*.DS_Store
+**/*.exe
