@@ -20,6 +20,8 @@ struct multicast_group_list *mc_list = NULL;
 struct command *cmd_obj = NULL;
 /* fd for receiving broadcast msgs */
 int broadcast_fd = -1;
+/* fd for receiving unicast msgs */
+int unicast_fd = -1;
 
 int main()
 {
@@ -39,6 +41,18 @@ int main()
   broadcast_addr.sin_port = htons(BROADCAST_REQ_PORT);
   broadcast_addr.sin_addr.s_addr = htonl(INADDR_ANY);
   if (bind(broadcast_fd, (struct sockaddr *)&broadcast_addr, (socklen_t)sizeof(broadcast_addr)) == -1)
+    cleanupAndExit("bind()");
+
+  /* setup unicast fd for receiving replies */
+  unicast_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (unicast_fd == -1)
+    cleanupAndExit("socket()");
+  struct sockaddr_in unicast_addr;
+  memset(&unicast_addr, 0, sizeof(unicast_addr));
+  unicast_addr.sin_family = AF_INET;
+  unicast_addr.sin_port = htons(UNICAST_PORT);
+  unicast_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(unicast_fd, (struct sockaddr *)&unicast_addr, (socklen_t)sizeof(unicast_addr)) == -1)
     cleanupAndExit("bind()");
 
   mc_list = (struct multicast_group_list *)calloc(1, sizeof(struct multicast_group_list));
@@ -174,7 +188,7 @@ int main()
         }
 
         /* Receive reply */
-        struct message *reply_msg = findGroupRecv();
+        struct message *reply_msg = findGroupRecv(unicast_fd);
         if (reply_msg == NULL)
         {
           printf(">> Error: No group found with name %s within %d seconds.\n\n", cmd.grp_name, FIND_GROUP_TIMEOUT);
@@ -261,7 +275,7 @@ int main()
         }
 
         /* Receive reply */
-        struct message *reply_msg = findGroupRecv();
+        struct message *reply_msg = findGroupRecv(unicast_fd);
         if (reply_msg == NULL)
         {
           printf(">> No group found withing %d seconds.\n\n", FIND_GROUP_TIMEOUT);
@@ -319,7 +333,7 @@ int main()
           strcpy(poll_req.options[i], cmd.options[i]);
 
         /* send poll on group */
-        int res = handlePollCommand(grp, poll_req);
+        int res = handlePollCommand(grp, poll_req, unicast_fd);
         if (res == -1)
         {
           printf(">> Error occurred while sending poll.\n\n");
@@ -434,6 +448,7 @@ int main()
             }
 
             /* ignore sendto() error as the listener might have stopped listening & closed socket */
+            caddr.sin_port = htons(UNICAST_PORT);
             clen = sizeof(caddr);
             sendto(sfd, buff, buff_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
 
@@ -487,6 +502,12 @@ void cleanup()
 
   if (cmd_obj != NULL)
     free(cmd_obj);
+
+  if (broadcast_fd != -1)
+    close(broadcast_fd);
+
+  if (unicast_fd != -1)
+    close(broadcast_fd);
 }
 
 void cleanupAndExit(char *err)

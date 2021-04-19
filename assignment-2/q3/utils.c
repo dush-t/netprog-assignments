@@ -22,7 +22,10 @@ struct command *parseCommand(char *raw_cmd)
     free(command_obj);
     return NULL;
   }
-  strncpy(cmd, raw_cmd, cmd_len);
+  if (raw_cmd[0] == '\n')
+    strncpy(cmd, raw_cmd + 1, cmd_len - 1);
+  else
+    strncpy(cmd, raw_cmd, cmd_len);
 
   char *cmd_name = strtok(cmd, " ");
   if (strcmp(cmd_name, CREATE_GROUP_STR) == 0)
@@ -675,60 +678,35 @@ int findGroupSend(struct message *msg)
   return 0;
 }
 
-struct message *findGroupRecv()
+struct message *findGroupRecv(int recv_fd)
 {
-  struct message *recv_msg = NULL;
-  /* Listen for responses within 5 seconds */
   char buff[PACKET_SIZE];
-  int broadcast_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (broadcast_fd == -1)
-  {
-    perror("socket()");
-    return NULL;
-  }
-
-  if (setsockopt(broadcast_fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1)
-  {
-    perror("setsockopt()");
-    return NULL;
-  }
-
-  struct sockaddr_in baddr;
-  baddr.sin_family = AF_INET;
-  baddr.sin_addr.s_addr = htonl(INADDR_ANY);
-  baddr.sin_port = htons(BROADCAST_REPLY_PORT);
-
-  if (bind(broadcast_fd, (struct sockaddr *)&baddr, (socklen_t)sizeof(baddr)) == -1)
-  {
-    perror("bind()");
-    return NULL;
-  }
+  struct message *recv_msg = NULL;
 
   printf("\n>> Finding group, please wait for %d seconds...\n\n", FIND_GROUP_TIMEOUT);
 
   fd_set find_grp_set;
 
   FD_ZERO(&find_grp_set);
-  FD_SET(broadcast_fd, &find_grp_set);
+  FD_SET(recv_fd, &find_grp_set);
 
   struct timeval tv;
   tv.tv_sec = FIND_GROUP_TIMEOUT;
   tv.tv_usec = 0;
 
-  int nready = select(broadcast_fd + 1, &find_grp_set, NULL, NULL, &tv);
+  int nready = select(recv_fd + 1, &find_grp_set, NULL, NULL, &tv);
   if (nready == 0)
   {
     /* Time expired */
-    close(broadcast_fd);
     return NULL;
   }
 
-  if (FD_ISSET(broadcast_fd, &find_grp_set))
+  if (FD_ISSET(recv_fd, &find_grp_set))
   {
     struct sockaddr_in caddr;
     int len = sizeof(caddr);
 
-    int n = recvfrom(broadcast_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+    int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
 
     recv_msg = deserialize(buff);
 
@@ -740,7 +718,6 @@ struct message *findGroupRecv()
     }
   }
 
-  close(broadcast_fd);
   return recv_msg;
 }
 
@@ -766,7 +743,7 @@ int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *
 
     /* send group info */
     int clen = sizeof(caddr);
-    caddr.sin_port = htons(BROADCAST_REPLY_PORT);
+    caddr.sin_port = htons(UNICAST_PORT);
 
     /* ignore sendto() error */
     sendto(broadcast_fd, reply_buff, reply_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
@@ -802,7 +779,7 @@ int sendSimpleMessage(struct multicast_group *grp, char *msg)
                 -1 --> error while sending
                 -2 --> error while receiving
 */
-int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int recv_fd)
 {
   if (grp == NULL)
   {
@@ -837,13 +814,13 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
   for (;;)
   {
     FD_ZERO(&monitor_fd);
-    FD_SET(grp->send_fd, &monitor_fd);
+    FD_SET(recv_fd, &monitor_fd);
 
     struct timeval tv;
     tv.tv_sec = FIND_GROUP_TIMEOUT;
     tv.tv_usec = 0;
 
-    int nready = select(grp->send_fd + 1, &monitor_fd, NULL, NULL, &tv);
+    int nready = select(recv_fd + 1, &monitor_fd, NULL, NULL, &tv);
     if (nready == -1)
     {
       free(buff);
@@ -855,13 +832,13 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
       break;
     }
 
-    if (FD_ISSET(grp->send_fd, &monitor_fd))
+    if (FD_ISSET(recv_fd, &monitor_fd))
     {
       struct sockaddr_in caddr;
       int len = sizeof(caddr);
       memset(buff, '\0', PACKET_SIZE);
 
-      int n = recvfrom(grp->send_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+      int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
 
       struct message *recv_msg = deserialize(buff);
 

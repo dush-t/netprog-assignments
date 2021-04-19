@@ -19,7 +19,7 @@
 #define FIND_GROUP_TIMEOUT 5
 
 #define BROADCAST_REQ_PORT 8000
-#define BROADCAST_REPLY_PORT 8001
+#define UNICAST_PORT 8001
 
 #define CREATE_GROUP_STR "create-group"
 #define JOIN_GROUP_STR "join-group"
@@ -195,12 +195,12 @@ struct multicast_group *findGroupByIpAndPort(char *ip, int port, struct multicas
 
 int findGroupSend(struct message *msg);
 
-struct message *findGroupRecv();
+struct message *findGroupRecv(int recv_fd);
 
 int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr);
 
 int sendSimpleMessage(struct multicast_group *grp, char *msg);
 
-int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req);
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int recv_fd);
 
 #endif
