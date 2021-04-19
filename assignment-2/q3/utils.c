@@ -292,18 +292,18 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struc
     return NULL;
   }
 
-  if (bind(recv_fd, (struct sockaddr *)&recv_addr, (socklen_t)sizeof(recv_addr)) == -1)
-  {
-    close(recv_fd);
-    perror("[initMulticastGroup] bind()");
-    return NULL;
-  }
-
   int ok = 1;
   if (setsockopt(recv_fd, SOL_SOCKET, SO_REUSEADDR, &ok, sizeof(ok)) < 0)
   {
     close(recv_fd);
-    perror("[initMulticastGroup] setsockopt()");
+    perror("[initMulticastGroup] setsockopt() SO_REUSEADDR");
+    return NULL;
+  }
+
+  if (bind(recv_fd, (struct sockaddr *)&recv_addr, (socklen_t)sizeof(recv_addr)) == -1)
+  {
+    close(recv_fd);
+    perror("[initMulticastGroup] bind()");
     return NULL;
   }
 
@@ -320,7 +320,7 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struc
   {
     close(recv_fd);
     close(send_fd);
-    perror("[initMulticastGroup] setsockopt()");
+    perror("[initMulticastGroup] setsockopt() IP_MULTICAST_LOOP");
     return NULL;
   }
 
