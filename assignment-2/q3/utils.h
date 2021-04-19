@@ -155,7 +155,7 @@ struct command *parseCommand(char *raw_cmd);
 
 void printCommand(struct command *command_obj);
 
-struct multicast_group *initMulticastGroup(char *name, char *ip, int port);
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struct multicast_group_list *mc_list, int *err);
 
 int insertMulticastGroup(struct multicast_group_list *list, struct multicast_group *group);
 
@@ -174,6 +174,8 @@ int joinMulticastGroup(struct multicast_group *, struct multicast_group_list *);
 int leaveMulticastGroup(struct multicast_group *, struct multicast_group_list *);
 
 struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_list *mc_list);
+
+struct multicast_group *findGroupByIpAndPort(char *ip, int port, struct multicast_group_list *mc_list);
 
 int findGroupSend(struct message *msg);
 

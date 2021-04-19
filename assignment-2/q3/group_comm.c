@@ -123,10 +123,16 @@ int main()
         struct create_grp_cmd cmd = cmd_obj->cmd_type.create_grp_cmd;
 
         /* create multicast group */
-        struct multicast_group *mc_grp = initMulticastGroup(cmd.grp_name, cmd.ip, cmd.port);
+        int init_mc_err = 0;
+        struct multicast_group *mc_grp = initMulticastGroup(cmd.grp_name, cmd.ip, cmd.port, mc_list, &init_mc_err);
         if (mc_grp == NULL)
         {
-          printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
+          if (init_mc_err == -1)
+            printf(">> Error: Multicast group %s already joined.\n\n", cmd.grp_name);
+          else if (init_mc_err == -2)
+            printf(">> Error: Multicast group %s:%d already joined.\n\n", cmd.ip, cmd.port);
+          else
+            printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
           break;
         }
 
@@ -174,10 +180,16 @@ int main()
         struct find_grp_reply find_grp_reply = reply_msg->payload.find_grp_reply;
 
         /* create multicast group */
-        struct multicast_group *mc_grp = initMulticastGroup(find_grp_reply.grp_name, find_grp_reply.ip, find_grp_reply.port);
+        int init_mc_err = 0;
+        struct multicast_group *mc_grp = initMulticastGroup(find_grp_reply.grp_name, find_grp_reply.ip, find_grp_reply.port, mc_list, &init_mc_err);
         if (mc_grp == NULL)
         {
-          printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
+          if (init_mc_err == -1)
+            printf(">> Error: Multicast group %s already joined.\n\n", find_grp_reply.grp_name);
+          else if (init_mc_err == -2)
+            printf(">> Error: Multicast group %s:%d already joined.\n\n", find_grp_reply.ip, find_grp_reply.port);
+          else
+            printf(">> Error: [initMulticastGroup] Could not create multicast group.\n\n");
           break;
         }
 

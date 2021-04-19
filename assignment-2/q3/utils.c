@@ -237,9 +237,25 @@ void printCommand(struct command *command_obj)
   }
 }
 
-struct multicast_group *initMulticastGroup(char *name, char *ip, int port)
+/*
+* Create sockets and fds for a new multicast group
+* err = -1 if name exists
+* err = -2 is IP:Port exists
+*/
+struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struct multicast_group_list *mc_list, int *err)
 {
-  // TO DO: check that group does not already exist
+  if (findGroupByName(name, mc_list) != NULL)
+  {
+    *err = -1;
+    return NULL;
+  }
+
+  if (findGroupByIpAndPort(ip, port, mc_list) != NULL)
+  {
+    *err = -2;
+    return NULL;
+  }
+
   struct multicast_group *grp = (struct multicast_group *)calloc(1, sizeof(struct multicast_group));
   if (grp == NULL)
   {
@@ -540,6 +556,26 @@ struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_l
   while (curr)
   {
     if (strcmp(grp_name, curr->name) == 0)
+    {
+      return curr;
+    }
+    curr = curr->next;
+  }
+
+  return NULL;
+}
+
+struct multicast_group *findGroupByIpAndPort(char *ip, int port, struct multicast_group_list *mc_list)
+{
+  if (mc_list == NULL)
+  {
+    return NULL;
+  }
+
+  struct multicast_group *curr = mc_list->head;
+  while (curr)
+  {
+    if (strcmp(ip, curr->ip) == 0 && port == curr->port)
     {
       return curr;
     }
