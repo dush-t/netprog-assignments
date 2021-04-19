@@ -7,6 +7,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <signal.h>
 
 #define GROUP_NAME_LEN 20
 #define IP_LEN 20

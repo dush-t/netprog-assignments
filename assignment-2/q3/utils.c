@@ -578,7 +578,6 @@ int findGroupSend(struct message *msg)
   char *buff = serialize(msg, &buff_len);
   if (buff == NULL)
   {
-    free(buff);
     perror("serialize()");
     return -1;
   }
@@ -604,6 +603,11 @@ struct message *findGroupRecv()
   if (broadcast_fd == -1)
   {
     perror("socket()");
+    return NULL;
+  }
+
+  if (setsockopt(broadcast_fd, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int)) == -1) {
+    perror("setsockopt()");
     return NULL;
   }
 
