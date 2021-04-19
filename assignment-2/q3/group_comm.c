@@ -102,6 +102,10 @@ int main()
         cleanupAndExit("recvfrom()");
       }
 
+      /* discard request from same IP */
+      if (strcmp(inet_ntoa(caddr.sin_addr), inet_ntoa(broadcast_addr.sin_addr)) == 0)
+        continue;
+
       struct message *parsed_msg = deserialize(msg);
       if (parsed_msg == NULL)
       {
@@ -369,7 +373,7 @@ int main()
     {
       struct multicast_group *curr_mc_grp = mc_list->head;
 
-      while (curr_mc_grp)
+      for (; curr_mc_grp != NULL; curr_mc_grp = curr_mc_grp->next)
       {
         if (FD_ISSET(curr_mc_grp->recv_fd, &read_set))
         {
@@ -383,6 +387,12 @@ int main()
           if (n < 0)
           {
             cleanupAndExit("recvfrom()");
+          }
+
+          /* discard request from same IP */
+          if (strcmp(inet_ntoa(caddr.sin_addr), inet_ntoa(unicast_addr.sin_addr)) == 0)
+          {
+            continue;
           }
 
           struct message *parsed_msg = deserialize(msg);
@@ -457,7 +467,6 @@ int main()
           }
           free(parsed_msg);
         }
-        curr_mc_grp = curr_mc_grp->next;
       }
     }
   }
