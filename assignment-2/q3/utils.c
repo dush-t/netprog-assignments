@@ -817,7 +817,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
     FD_SET(recv_fd, &monitor_fd);
 
     struct timeval tv;
-    tv.tv_sec = FIND_GROUP_TIMEOUT;
+    tv.tv_sec = POLL_TIMEOUT;
     tv.tv_usec = 0;
 
     int nready = select(recv_fd + 1, &monitor_fd, NULL, NULL, &tv);
