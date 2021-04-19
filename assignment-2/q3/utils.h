@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #define GROUP_NAME_LEN 20
 #define IP_LEN 20
@@ -14,11 +15,15 @@
 #define COMMAND_LEN 1024
 #define MAX_GROUPS 5
 #define PACKET_SIZE 1024
+#define FIND_GROUP_TIMEOUT 5
+
+#define BROADCAST_REQ_PORT 8000
+#define BROADCAST_REPLY_PORT 8001
 
 #define CREATE_GROUP_STR "create-group"
 #define JOIN_GROUP_STR "join-group"
 #define LEAVE_GROUP_STR "leave-group"
-#define FIND_GROUPS_STR "find-groups"
+#define FIND_GROUP_STR "find-group"
 #define SEND_MESSAGE_STR "send-message"
 #define INIT_POLL_STR "init-poll"
 #define LIST_GROUPS_STR "list-groups"
@@ -30,7 +35,7 @@ enum cmds
   CREATE_GROUP,
   JOIN_GROUP,
   LEAVE_GROUP,
-  FIND_GROUPS,
+  FIND_GROUP,
   SEND_MESSAGE,
   INIT_POLL,
   LIST_GROUPS,
@@ -114,8 +119,8 @@ struct multicast_group_list
 enum message_type
 {
   SIMPLE_MSG,
-  SEARCH_GROUP_REQ,
-  SEARCH_GROUP_REPLY,
+  FIND_GROUP_REQ,
+  FIND_GROUP_REPLY,
   POLL_REQ,
   POLL_REPLY
 };
@@ -124,17 +129,16 @@ struct simple_msg
 {
   char msg[MESSAGE_LEN];
 };
-struct search_grp_req
+struct find_grp_req
 {
   char query[GROUP_NAME_LEN];
 };
 
-struct search_grp_reply
+struct find_grp_reply
 {
-  int count;
-  char grp_name[MAX_GROUPS][GROUP_NAME_LEN];
-  char ip[MAX_GROUPS][IP_LEN];
-  int port[MAX_GROUPS];
+  char grp_name[GROUP_NAME_LEN];
+  char ip[IP_LEN];
+  int port;
 };
 
 struct message
@@ -143,8 +147,8 @@ struct message
   union
   {
     struct simple_msg simple_msg;
-    struct search_grp_req search_grp_req;
-    struct search_grp_reply search_grp_reply;
+    struct find_grp_req find_grp_req;
+    struct find_grp_reply find_grp_reply;
   } payload;
 };
 
@@ -171,5 +175,11 @@ int joinMulticastGroup(struct multicast_group *, struct multicast_group_list *);
 int leaveMulticastGroup(struct multicast_group *, struct multicast_group_list *);
 
 struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_list *mc_list);
+
+int findGroupSend(struct message *msg);
+
+struct message *findGroupRecv();
+
+int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr);
 
 #endif

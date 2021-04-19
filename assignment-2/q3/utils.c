@@ -70,9 +70,9 @@ struct command *parseCommand(char *raw_cmd)
 
     command_obj->cmd_type.leave_grp_cmd = leave_grp_cmd;
   }
-  else if (strcmp(cmd_name, FIND_GROUPS_STR) == 0)
+  else if (strcmp(cmd_name, FIND_GROUP_STR) == 0)
   {
-    command_obj->cmd_name = FIND_GROUPS;
+    command_obj->cmd_name = FIND_GROUP;
 
     struct find_grp_cmd find_grp_cmd;
     char *query = strtok(NULL, " ");
@@ -155,7 +155,7 @@ struct command *parseCommand(char *raw_cmd)
     return NULL;
   }
 
-  return NULL;
+  return command_obj;
 }
 
 void printCommand(struct command *command_obj)
@@ -189,7 +189,7 @@ void printCommand(struct command *command_obj)
     break;
   }
 
-  case FIND_GROUPS:
+  case FIND_GROUP:
   {
     struct find_grp_cmd cmd = command_obj->cmd_type.find_grp_cmd;
     printf("find-groups %s\n", cmd.query);
@@ -422,18 +422,18 @@ char *serialize(struct message *msg, int *len)
     break;
   }
 
-  case SEARCH_GROUP_REQ:
+  case FIND_GROUP_REQ:
   {
-    int sz = sizeof(struct search_grp_req);
-    memcpy(res + offset, &(msg->payload.search_grp_req), sz);
+    int sz = sizeof(struct find_grp_req);
+    memcpy(res + offset, &(msg->payload.find_grp_req), sz);
     offset += sz;
     break;
   }
 
-  case SEARCH_GROUP_REPLY:
+  case FIND_GROUP_REPLY:
   {
-    int sz = sizeof(struct search_grp_reply);
-    memcpy(res + offset, &(msg->payload.search_grp_reply), sz);
+    int sz = sizeof(struct find_grp_reply);
+    memcpy(res + offset, &(msg->payload.find_grp_reply), sz);
     offset += sz;
     break;
   }
@@ -467,15 +467,15 @@ struct message *deserialize(char *msg)
     break;
   }
 
-  case SEARCH_GROUP_REQ:
+  case FIND_GROUP_REQ:
   {
-    memcpy(&(msg_obj->payload.search_grp_req), msg + offset, sizeof(struct search_grp_req));
+    memcpy(&(msg_obj->payload.find_grp_req), msg + offset, sizeof(struct find_grp_req));
     break;
   }
 
-  case SEARCH_GROUP_REPLY:
+  case FIND_GROUP_REPLY:
   {
-    memcpy(&(msg_obj->payload.search_grp_reply), msg + offset, sizeof(struct search_grp_reply));
+    memcpy(&(msg_obj->payload.find_grp_reply), msg + offset, sizeof(struct find_grp_reply));
     break;
   }
 
@@ -548,4 +548,143 @@ struct multicast_group *findGroupByName(char *grp_name, struct multicast_group_l
   }
 
   return NULL;
+}
+
+int findGroupSend(struct message *msg)
+{
+  int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (fd == -1)
+  {
+    perror("socket()");
+    return -1;
+  }
+
+  /* Set socket to allow broadcast */
+  int broadcast_perm = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (void *)&broadcast_perm, sizeof(broadcast_perm)) < 0)
+  {
+    perror("setsockopt()");
+    return -1;
+  }
+
+  /* Construct local address structure */
+  struct sockaddr_in baddr;
+  memset(&baddr, 0, sizeof(baddr));                /* Zero out structure */
+  baddr.sin_family = AF_INET;                      /* Internet address family */
+  baddr.sin_addr.s_addr = htonl(INADDR_BROADCAST); /* Broadcast IP address */
+  baddr.sin_port = htons(BROADCAST_REQ_PORT);      /* Broadcast port */
+
+  int buff_len;
+  char *buff = serialize(msg, &buff_len);
+  if (buff == NULL)
+  {
+    free(buff);
+    perror("serialize()");
+    return -1;
+  }
+
+  if (sendto(fd, buff, buff_len, 0, (struct sockaddr *)&baddr, (socklen_t)sizeof(baddr)) == -1)
+  {
+    free(buff);
+    perror("sendto()");
+    return -1;
+  }
+
+  free(buff);
+  close(fd);
+  return 0;
+}
+
+struct message *findGroupRecv()
+{
+  struct message *recv_msg = NULL;
+  /* Listen for responses within 5 seconds */
+  char buff[PACKET_SIZE];
+  int broadcast_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (broadcast_fd == -1)
+  {
+    perror("socket()");
+    return NULL;
+  }
+
+  struct sockaddr_in baddr;
+  baddr.sin_family = AF_INET;
+  baddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  baddr.sin_port = htons(BROADCAST_REPLY_PORT);
+
+  if (bind(broadcast_fd, (struct sockaddr *)&baddr, (socklen_t)sizeof(baddr)) == -1)
+  {
+    perror("bind()");
+    return NULL;
+  }
+
+  fd_set find_grp_set;
+  for (;;)
+  {
+    FD_ZERO(&find_grp_set);
+    FD_SET(broadcast_fd, &find_grp_set);
+
+    struct timeval tv;
+    tv.tv_sec = FIND_GROUP_TIMEOUT;
+    tv.tv_usec = 0;
+
+    int nready = select(broadcast_fd + 1, &find_grp_set, NULL, NULL, &tv);
+    if (nready == 0)
+    {
+      /* Time expired */
+      return NULL;
+    }
+
+    if (FD_ISSET(broadcast_fd, &find_grp_set))
+    {
+      struct sockaddr_in caddr;
+      int len = sizeof(caddr);
+
+      int n = recvfrom(broadcast_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+
+      recv_msg = deserialize(buff);
+
+      /* ensure that this is a reply for FIND_GROUP */
+      if (recv_msg->msg_type != FIND_GROUP_REPLY)
+      {
+        recv_msg = NULL;
+      }
+      break;
+    }
+  }
+  close(broadcast_fd);
+  return recv_msg;
+}
+
+int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr)
+{
+  struct multicast_group *grp = findGroupByName(parsed_msg->payload.find_grp_req.query, mc_list);
+  if (grp != NULL)
+  {
+    struct message msg_reply;
+    msg_reply.msg_type = FIND_GROUP_REPLY;
+    strcpy(msg_reply.payload.find_grp_reply.grp_name, grp->name);
+    strcpy(msg_reply.payload.find_grp_reply.ip, grp->ip);
+    msg_reply.payload.find_grp_reply.port = grp->port;
+
+    int reply_len;
+    char *reply_buff = serialize(&msg_reply, &reply_len);
+
+    if (reply_buff == NULL)
+    {
+      perror("serialize()");
+      return -1;
+    }
+
+    /* send group info */
+    int clen = sizeof(caddr);
+    caddr.sin_port = htons(BROADCAST_REPLY_PORT);
+
+    /* ignore sendto() error */
+    sendto(broadcast_fd, reply_buff, reply_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
+
+    free(reply_buff);
+  }
+
+  return 0;
 }

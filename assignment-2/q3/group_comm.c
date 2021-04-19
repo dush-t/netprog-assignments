@@ -7,8 +7,6 @@
 
 #include "utils.h"
 
-#define BROADCAST_PORT 8080
-
 void errExit(char *);
 void printCommands();
 void cleanupAndExit(char *err);
@@ -38,7 +36,7 @@ int main()
   struct sockaddr_in broadcast_addr;
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
-  broadcast_addr.sin_port = htons(BROADCAST_PORT);
+  broadcast_addr.sin_port = htons(BROADCAST_REQ_PORT);
   broadcast_addr.sin_addr.s_addr = htonl(INADDR_ANY);
   if (bind(broadcast_fd, (struct sockaddr *)&broadcast_addr, (socklen_t)sizeof(broadcast_addr)) == -1)
     cleanupAndExit("bind()");
@@ -62,6 +60,8 @@ int main()
     {
       // TO DO
     }
+
+    /* check if it is a broadcast message */
     if (FD_ISSET(broadcast_fd, &read_set))
     {
       /* received broadcast message */
@@ -76,8 +76,16 @@ int main()
         cleanupAndExit("recvfrom()");
       }
 
-      printf(">> Received broadcast from %s:%d\n\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port));
+      struct message *parsed_msg = deserialize(msg);
+      if (parsed_msg->msg_type == FIND_GROUP_REQ)
+      {
+        if (handleFindGroupReq(parsed_msg, mc_list, broadcast_fd, caddr) == -1)
+          printf(">> Error: error occurred while handling find group request.\n\n");
+      }
+
+      free(parsed_msg);
     }
+
     if (FD_ISSET(STDIN_FILENO, &read_set))
     {
       char *cmd_buf = (char *)calloc(COMMAND_LEN, sizeof(char));
@@ -154,6 +162,45 @@ int main()
         break;
       }
 
+      case FIND_GROUP:
+      {
+        struct find_grp_cmd cmd = cmd_obj->cmd_type.find_grp_cmd;
+
+        /* ensure that already not a part of the group */
+        struct multicast_group *grp = NULL;
+        if ((grp = findGroupByName(cmd.query, mc_list)) != NULL)
+        {
+          printf(">> Already joined group %s (%s:%d).\n\n", grp->name, grp->ip, grp->port);
+          break;
+        }
+
+        /* create message */
+        struct message req_msg;
+        req_msg.msg_type = FIND_GROUP_REQ;
+        strcpy(req_msg.payload.find_grp_req.query, cmd.query);
+
+        /* Send the broadcast message */
+        if (findGroupSend(&req_msg) == -1)
+        {
+          cleanupAndExit("findGroupSend()");
+        }
+
+        /* Receive reply */
+        struct message *reply_msg = findGroupRecv();
+        if (reply_msg == NULL)
+        {
+          printf(">> No group found withing %d seconds.\n\n", FIND_GROUP_TIMEOUT);
+          break;
+        }
+
+        struct find_grp_reply find_grp_reply = reply_msg->payload.find_grp_reply;
+
+        printf(">> Found group %s with address %s:%d\n\n", find_grp_reply.grp_name, find_grp_reply.ip, find_grp_reply.port);
+
+        free(reply_msg);
+        break;
+      }
+
       case HELP_CMD:
       {
         printCommands();
@@ -182,7 +229,7 @@ void printCommands()
   printf("\n> create-group [GROUP_NAME] [GROUP_IP] [GROUP_PORT]");
   printf("\n> join-group [GROUP_IP] [GROUP_PORT]");
   printf("\n> leave-group [GROUP_NAME]");
-  printf("\n> find-groups [SEARCH_STRING]");
+  printf("\n> find-group [GROUP_NAME]");
   printf("\n> list-groups");
   printf("\n> send-message [GROUP_NAME] \"[MESSAGE]\"");
   printf("\n> init-poll [GROUP_NAME] \"[QUESTION]\" [OPTION_COUNT] \"[OPTION_1]\" \"[OPTION_2]\"...");
