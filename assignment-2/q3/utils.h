@@ -140,6 +140,20 @@ struct find_grp_reply
   int port;
 };
 
+struct poll_req
+{
+  int option_cnt;
+  char que[MESSAGE_LEN];
+  char options[NUM_OPTIONS][MESSAGE_LEN];
+  int id;
+};
+
+struct poll_reply
+{
+  int option;
+  int id;
+};
+
 struct message
 {
   enum message_type msg_type;
@@ -148,6 +162,8 @@ struct message
     struct simple_msg simple_msg;
     struct find_grp_req find_grp_req;
     struct find_grp_reply find_grp_reply;
+    struct poll_req poll_req;
+    struct poll_reply poll_reply;
   } payload;
 };
 
@@ -184,5 +200,7 @@ struct message *findGroupRecv();
 int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr);
 
 int sendSimpleMessage(struct multicast_group *grp, char *msg);
+
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req);
 
 #endif

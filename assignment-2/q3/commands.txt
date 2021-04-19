@@ -1,1 +1,3 @@
 create-group abc 239.0.0.1 7000
+send-message abc "lorem epsum"
+init-poll abc "this is my poll" 3 "option 1" "option 2" "option 3"

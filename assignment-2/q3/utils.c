@@ -17,6 +17,11 @@ struct command *parseCommand(char *raw_cmd)
   int cmd_len = strlen(raw_cmd);
   if (raw_cmd[cmd_len - 1] == '\n')
     cmd_len--;
+  if (cmd_len == 0)
+  {
+    free(command_obj);
+    return NULL;
+  }
   strncpy(cmd, raw_cmd, cmd_len);
 
   char *cmd_name = strtok(cmd, " ");
@@ -109,7 +114,7 @@ struct command *parseCommand(char *raw_cmd)
     char *grp_name = strtok(NULL, " ");
     char *que = strtok(NULL, "\"");
     char *option_cnt = strtok(NULL, " ");
-    printf("\ngrp_name: %s, que: %s, option_cnt: %s\n", grp_name, que, option_cnt);
+
     if (grp_name == NULL || que == NULL || option_cnt == NULL)
     {
       free(command_obj);
@@ -463,6 +468,22 @@ char *serialize(struct message *msg, int *len)
     break;
   }
 
+  case POLL_REQ:
+  {
+    int sz = sizeof(struct poll_req);
+    memcpy(res + offset, &(msg->payload.poll_req), sz);
+    offset += sz;
+    break;
+  }
+
+  case POLL_REPLY:
+  {
+    int sz = sizeof(struct poll_reply);
+    memcpy(res + offset, &(msg->payload.poll_reply), sz);
+    offset += sz;
+    break;
+  }
+
   default:
     perror("Message type not recognized.");
     return NULL;
@@ -501,6 +522,18 @@ struct message *deserialize(char *msg)
   case FIND_GROUP_REPLY:
   {
     memcpy(&(msg_obj->payload.find_grp_reply), msg + offset, sizeof(struct find_grp_reply));
+    break;
+  }
+
+  case POLL_REQ:
+  {
+    memcpy(&(msg_obj->payload.poll_req), msg + offset, sizeof(struct poll_req));
+    break;
+  }
+
+  case POLL_REPLY:
+  {
+    memcpy(&(msg_obj->payload.poll_reply), msg + offset, sizeof(struct poll_reply));
     break;
   }
 
@@ -702,6 +735,7 @@ struct message *findGroupRecv()
     /* ensure that this is a reply for FIND_GROUP */
     if (recv_msg->msg_type != FIND_GROUP_REPLY)
     {
+      free(recv_msg);
       recv_msg = NULL;
     }
   }
@@ -761,4 +795,100 @@ int sendSimpleMessage(struct multicast_group *grp, char *msg)
 
   free(buff);
   return res;
+}
+
+/*
+  return value = 0 --> success 
+                -1 --> error while sending
+                -2 --> error while receiving
+*/
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
+{
+  if (grp == NULL)
+  {
+    return -1;
+  }
+
+  struct message pkt;
+  pkt.msg_type = POLL_REQ;
+  pkt.payload.poll_req = poll_req;
+
+  int buff_len;
+  char *buff = serialize(&pkt, &buff_len);
+  if (buff == NULL)
+  {
+    perror("serialize()");
+    return -1;
+  }
+
+  /* Send poll message to group */
+  if (sendto(grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr)) == -1)
+  {
+    perror("sendto()");
+    free(buff);
+    return -1;
+  }
+
+  /* Receive poll reply from peers */
+  printf(">> Getting replies, please wait...\n\n");
+  fd_set monitor_fd;
+  int option_cnt[NUM_OPTIONS] = {0};
+
+  for (;;)
+  {
+    FD_ZERO(&monitor_fd);
+    FD_SET(grp->send_fd, &monitor_fd);
+
+    struct timeval tv;
+    tv.tv_sec = FIND_GROUP_TIMEOUT;
+    tv.tv_usec = 0;
+
+    int nready = select(grp->send_fd + 1, &monitor_fd, NULL, NULL, &tv);
+    if (nready == -1)
+    {
+      free(buff);
+      return -1;
+    }
+    if (nready == 0)
+    {
+      /* Time expired */
+      break;
+    }
+
+    if (FD_ISSET(grp->send_fd, &monitor_fd))
+    {
+      struct sockaddr_in caddr;
+      int len = sizeof(caddr);
+      memset(buff, '\0', PACKET_SIZE);
+
+      int n = recvfrom(grp->send_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+
+      struct message *recv_msg = deserialize(buff);
+
+      /* ensure that this is a reply for FIND_GROUP */
+      if (recv_msg->msg_type != POLL_REPLY || recv_msg->payload.poll_reply.id != poll_req.id)
+      {
+        free(recv_msg);
+        continue;
+      }
+      else
+      {
+        int selected_opt_idx = recv_msg->payload.poll_reply.option;
+        printf(">> %s:%d selected option %d.\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1);
+        option_cnt[selected_opt_idx] += 1;
+      }
+
+      free(recv_msg);
+    }
+  }
+
+  printf(">> Final option count: \n");
+  for (int i = 0; i < poll_req.option_cnt; i++)
+  {
+    printf(">> Option %d -> %d\n", i + 1, option_cnt[i]);
+  }
+  printf("\n");
+
+  free(buff);
+  return 0;
 }

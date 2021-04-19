@@ -299,6 +299,40 @@ int main()
         break;
       }
 
+      case INIT_POLL:
+      {
+        struct init_poll_cmd cmd = cmd_obj->cmd_type.init_poll_cmd;
+
+        /* ensure that the group is joined */
+        struct multicast_group *grp = NULL;
+        if ((grp = findGroupByName(cmd.grp_name, mc_list)) == NULL)
+        {
+          printf(">> Group %s not joined.\n\n", cmd.grp_name);
+          break;
+        }
+
+        struct poll_req poll_req;
+        poll_req.id = getpid();
+        poll_req.option_cnt = cmd.option_cnt;
+        strcpy(poll_req.que, cmd.que);
+        for (int i = 0; i < cmd.option_cnt; i++)
+          strcpy(poll_req.options[i], cmd.options[i]);
+
+        /* send poll on group */
+        int res = handlePollCommand(grp, poll_req);
+        if (res == -1)
+        {
+          printf(">> Error occurred while sending poll.\n\n");
+        }
+        else if (res == -2)
+        {
+          printf(">> Error occurred while receiving poll.\n\n");
+        }
+        /* else the function would have successfully printed output */
+
+        break;
+      }
+
       case HELP_CMD:
       {
         printCommands();
@@ -343,9 +377,68 @@ int main()
             printf("Error: Could not parse received message.\n\n");
             continue;
           }
+
           if (parsed_msg->msg_type == SIMPLE_MSG)
           {
             printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, parsed_msg->payload.simple_msg.msg);
+          }
+          else if (parsed_msg->msg_type == POLL_REQ)
+          {
+            struct poll_req poll_req = parsed_msg->payload.poll_req;
+
+            /* Print poll */
+            printf(">> Please vote for the poll - \n");
+            printf(">> %s\n", poll_req.que);
+            for (int i = 0; i < poll_req.option_cnt; i++)
+            {
+              printf(">> %d. %s\n", i + 1, poll_req.options[i]);
+            }
+            printf("\nEnter option number: ");
+
+            /* Get reply */
+            int poll_opt_selected;
+            for (;;)
+            {
+              scanf("%d", &poll_opt_selected);
+              if (poll_opt_selected < 1 || poll_opt_selected > poll_req.option_cnt)
+              {
+                printf("\nEnter valid option number: ");
+              }
+              else
+              {
+                break;
+              }
+            }
+
+            /* send poll reply */
+            struct message poll_reply_msg;
+            poll_reply_msg.msg_type = POLL_REPLY;
+            poll_reply_msg.payload.poll_reply.id = poll_req.id;
+            poll_reply_msg.payload.poll_reply.option = poll_opt_selected - 1; // since poll_opt_selected would be 1 based
+
+            int buff_len;
+            char *buff = serialize(&poll_reply_msg, &buff_len);
+            if (buff == NULL)
+            {
+              printf(">> Error while sending poll reply.\n\n");
+              continue;
+            }
+
+            int sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (sfd == -1)
+            {
+              perror("socket()");
+              free(buff);
+              printf(">> Error while sending poll reply.\n\n");
+              continue;
+            }
+
+            /* ignore sendto() error as the listener might have stopped listening & closed socket */
+            clen = sizeof(caddr);
+            sendto(sfd, buff, buff_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
+
+            close(sfd);
+            free(buff);
           }
           free(parsed_msg);
         }
