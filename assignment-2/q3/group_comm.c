@@ -55,7 +55,6 @@ int main()
     /* set fd to monitor */
     FD_SET(STDIN_FILENO, &read_set);
     FD_SET(broadcast_fd, &read_set);
-
     if (mc_list != NULL && mc_list->count > 0)
     {
       struct multicast_group *curr = mc_list->head;
@@ -90,6 +89,11 @@ int main()
       }
 
       struct message *parsed_msg = deserialize(msg);
+      if (parsed_msg == NULL)
+      {
+        printf(">> Error: Could not parse received message.\n\n");
+        break;
+      }
       if (parsed_msg->msg_type == FIND_GROUP_REQ)
       {
         if (handleFindGroupReq(parsed_msg, mc_list, broadcast_fd, caddr) == -1)
@@ -272,6 +276,29 @@ int main()
         break;
       }
 
+      case SEND_MESSAGE:
+      {
+        struct send_msg_cmd cmd = cmd_obj->cmd_type.send_msg_cmd;
+
+        /* ensure that the group is joined */
+        struct multicast_group *grp = NULL;
+        if ((grp = findGroupByName(cmd.grp_name, mc_list)) == NULL)
+        {
+          printf(">> Group %s not joined.\n\n", cmd.grp_name);
+          break;
+        }
+
+        /* send message to group */
+        if (sendSimpleMessage(grp, cmd.msg) == -1)
+        {
+          printf(">> Error while sending message to group.\n\n");
+          break;
+        }
+
+        printf(">> Message sent to group %s.\n\n", cmd.grp_name);
+        break;
+      }
+
       case HELP_CMD:
       {
         printCommands();
@@ -287,6 +314,42 @@ int main()
 
       default:
         break;
+      }
+    }
+
+    if (mc_list != NULL && mc_list->count > 0)
+    {
+      struct multicast_group *curr_mc_grp = mc_list->head;
+
+      while (curr_mc_grp)
+      {
+        if (FD_ISSET(curr_mc_grp->recv_fd, &read_set))
+        {
+          /* received multicast message */
+          char msg[PACKET_SIZE];
+          struct sockaddr_in caddr;
+          memset(&caddr, 0, sizeof(caddr));
+          int clen = sizeof(caddr);
+
+          int n = recvfrom(curr_mc_grp->recv_fd, msg, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&clen);
+          if (n < 0)
+          {
+            cleanupAndExit("recvfrom()");
+          }
+
+          struct message *parsed_msg = deserialize(msg);
+          if (parsed_msg == NULL)
+          {
+            printf("Error: Could not parse received message.\n\n");
+            continue;
+          }
+          if (parsed_msg->msg_type == SIMPLE_MSG)
+          {
+            printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, parsed_msg->payload.simple_msg.msg);
+          }
+          free(parsed_msg);
+        }
+        curr_mc_grp = curr_mc_grp->next;
       }
     }
   }
@@ -318,7 +381,15 @@ void cleanup()
 {
   if (mc_list != NULL)
   {
-    // TO DO: leave groups and free memory
+    struct multicast_group *curr_mc_grp = mc_list->head;
+
+    while (curr_mc_grp)
+    {
+      leaveMulticastGroup(curr_mc_grp, mc_list);
+      curr_mc_grp = curr_mc_grp->next;
+    }
+
+    free(mc_list);
   }
 
   if (cmd_obj != NULL)

@@ -292,27 +292,37 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struc
     return NULL;
   }
 
-  int ok = 1;
-  if (setsockopt(recv_fd, SOL_SOCKET, SO_REUSEADDR, &ok, sizeof(ok)) < 0)
+  if (bind(recv_fd, (struct sockaddr *)&recv_addr, (socklen_t)sizeof(recv_addr)) == -1)
   {
-    perror("[initMulticastGroup] setsockopt()");
+    close(recv_fd);
+    perror("[initMulticastGroup] bind()");
     return NULL;
   }
 
-  if (bind(recv_fd, (struct sockaddr *)&recv_addr, (socklen_t)sizeof(recv_addr)) == -1)
+  int ok = 1;
+  if (setsockopt(recv_fd, SOL_SOCKET, SO_REUSEADDR, &ok, sizeof(ok)) < 0)
   {
-    perror("[initMulticastGroup] bind()");
+    close(recv_fd);
+    perror("[initMulticastGroup] setsockopt()");
     return NULL;
   }
 
   send_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (send_fd == -1)
   {
+    close(recv_fd);
     perror("[initMulticastGroup] socket()");
     return NULL;
   }
 
-  // TO DO: multicast loop option??
+  int not_ok = 0;
+  if (setsockopt(send_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &not_ok, sizeof(not_ok)) == -1)
+  {
+    close(recv_fd);
+    close(send_fd);
+    perror("[initMulticastGroup] setsockopt()");
+    return NULL;
+  }
 
   grp->recv_addr = recv_addr;
   grp->recv_fd = recv_fd;
@@ -542,6 +552,9 @@ int leaveMulticastGroup(struct multicast_group *grp, struct multicast_group_list
     return -1;
   }
 
+  close(grp->send_fd);
+  close(grp->recv_fd);
+  free(grp);
   return 0;
 }
 
@@ -728,4 +741,24 @@ int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *
   }
 
   return 0;
+}
+
+int sendSimpleMessage(struct multicast_group *grp, char *msg)
+{
+  struct message pkt;
+  pkt.msg_type = SIMPLE_MSG;
+  strcpy(pkt.payload.simple_msg.msg, msg);
+
+  int buff_len;
+  char *buff = serialize(&pkt, &buff_len);
+  if (buff == NULL)
+  {
+    perror("serialize()");
+    return -1;
+  }
+
+  int res = sendto(grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr));
+
+  free(buff);
+  return res;
 }

@@ -183,4 +183,6 @@ struct message *findGroupRecv();
 
 int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr);
 
+int sendSimpleMessage(struct multicast_group *grp, char *msg);
+
 #endif
