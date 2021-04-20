@@ -410,11 +410,11 @@ int listGroups(struct multicast_group_list *list)
 
   if (list->count == 0)
   {
-    printf("\nConnected to 0 groups.\n\n");
+    printf("\n>> Connected to 0 groups.\n\n");
     return 0;
   }
 
-  printf("\nConnected to %d group(s).\n", list->count);
+  printf("\n>> Connected to %d group(s).\n", list->count);
   struct multicast_group *curr = list->head;
   for (int i = 0; i < list->count; i++)
   {
@@ -863,7 +863,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
       }
     }
 
-    printf(">> Final option count: \n");
+    printf("\n>> Final option count: \n");
     for (int i = 0; i < poll_req.option_cnt; i++)
     {
       printf(">> Option %d -> %d\n", i + 1, option_cnt[i]);
