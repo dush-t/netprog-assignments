@@ -939,7 +939,7 @@ struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *
   /* send broacast message to find the group with given name */
   struct message req_msg;
   req_msg.msg_type = FIND_GROUP_REQ;
-  req_msg.payload.find_grp_req.reply_port = saddr.sin_port;
+  req_msg.payload.find_grp_req.reply_port = ntohs(saddr.sin_port);
   strcpy(req_msg.payload.find_grp_req.query, grp_name);
 
   /* Send the broadcast message */
