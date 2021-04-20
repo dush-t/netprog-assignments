@@ -168,26 +168,9 @@ int main()
       case JOIN_GROUP:
       {
         struct join_grp_cmd cmd = cmd_obj->cmd_type.join_grp_cmd;
-        /* ensure that the group is not joined already */
-        if (findGroupByName(cmd.grp_name, mc_list) != NULL)
-        {
-          printf(">> Group %s already joined.\n\n", cmd.grp_name);
-          break;
-        }
 
-        /* send broacast message to find the group with given name */
-        struct message req_msg;
-        req_msg.msg_type = FIND_GROUP_REQ;
-        strcpy(req_msg.payload.find_grp_req.query, cmd.grp_name);
-
-        /* Send the broadcast message */
-        if (findGroupSend(&req_msg) == -1)
-        {
-          cleanupAndExit("findGroupSend()");
-        }
-
-        /* Receive reply */
-        struct message *reply_msg = findGroupRecv(unicast_fd);
+        int err_no = 0;
+        struct message *reply_msg = handleFindGroupCmd(cmd.grp_name, mc_list, &err_no);
         if (reply_msg == NULL)
         {
           printf(">> Error: No group found with name %s within %d seconds.\n\n", cmd.grp_name, FIND_GROUP_TIMEOUT);
@@ -254,30 +237,11 @@ int main()
       {
         struct find_grp_cmd cmd = cmd_obj->cmd_type.find_grp_cmd;
 
-        /* ensure that already not a part of the group */
-        struct multicast_group *grp = NULL;
-        if ((grp = findGroupByName(cmd.query, mc_list)) != NULL)
-        {
-          printf(">> Already joined group %s (%s:%d).\n\n", grp->name, grp->ip, grp->port);
-          break;
-        }
-
-        /* create message */
-        struct message req_msg;
-        req_msg.msg_type = FIND_GROUP_REQ;
-        strcpy(req_msg.payload.find_grp_req.query, cmd.query);
-
-        /* Send the broadcast message */
-        if (findGroupSend(&req_msg) == -1)
-        {
-          cleanupAndExit("findGroupSend()");
-        }
-
-        /* Receive reply */
-        struct message *reply_msg = findGroupRecv(unicast_fd);
+        int err_no = 0;
+        struct message *reply_msg = handleFindGroupCmd(cmd.query, mc_list, &err_no);
         if (reply_msg == NULL)
         {
-          printf(">> No group found withing %d seconds.\n\n", FIND_GROUP_TIMEOUT);
+          printf(">> Error: No group found with name %s within %d seconds.\n\n", cmd.query, FIND_GROUP_TIMEOUT);
           break;
         }
 

@@ -678,43 +678,54 @@ int findGroupSend(struct message *msg)
   return 0;
 }
 
-struct message *findGroupRecv(int recv_fd)
+struct message *findGroupRecv(int recv_fd, char *grp_name)
 {
   char buff[PACKET_SIZE];
   struct message *recv_msg = NULL;
 
-  printf("\n>> Finding group, please wait for %d seconds...\n\n", FIND_GROUP_TIMEOUT);
+  printf("\n>> Finding group, please wait for about %d seconds...\n\n", FIND_GROUP_TIMEOUT);
 
   fd_set find_grp_set;
 
-  FD_ZERO(&find_grp_set);
-  FD_SET(recv_fd, &find_grp_set);
-
-  struct timeval tv;
-  tv.tv_sec = FIND_GROUP_TIMEOUT;
-  tv.tv_usec = 0;
-
-  int nready = select(recv_fd + 1, &find_grp_set, NULL, NULL, &tv);
-  if (nready == 0)
+  /* 
+  * Find group blocks on recvfrom() so it ignores all other 
+  * messages received while finding a group. This can be improved.
+  * */
+  for (;;)
   {
-    /* Time expired */
-    return NULL;
-  }
+    FD_ZERO(&find_grp_set);
+    FD_SET(recv_fd, &find_grp_set);
 
-  if (FD_ISSET(recv_fd, &find_grp_set))
-  {
-    struct sockaddr_in caddr;
-    int len = sizeof(caddr);
+    struct timeval tv;
+    tv.tv_sec = FIND_GROUP_TIMEOUT;
+    tv.tv_usec = 0;
 
-    int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
-
-    recv_msg = deserialize(buff);
-
-    /* ensure that this is a reply for FIND_GROUP */
-    if (recv_msg->msg_type != FIND_GROUP_REPLY)
+    int nready = select(recv_fd + 1, &find_grp_set, NULL, NULL, &tv);
+    if (nready == 0)
     {
-      free(recv_msg);
-      recv_msg = NULL;
+      /* Time expired */
+      return NULL;
+    }
+
+    if (FD_ISSET(recv_fd, &find_grp_set))
+    {
+      struct sockaddr_in caddr;
+      int len = sizeof(caddr);
+
+      int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+
+      recv_msg = deserialize(buff);
+
+      /* ensure that this is a reply for FIND_GROUP and the group name is same */
+      if (recv_msg->msg_type != FIND_GROUP_REPLY || strcmp(recv_msg->payload.find_grp_reply.grp_name, grp_name) != 0)
+      {
+        free(recv_msg);
+        recv_msg = NULL;
+      }
+      else
+      {
+        return recv_msg;
+      }
     }
   }
 
@@ -743,7 +754,7 @@ int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *
 
     /* send group info */
     int clen = sizeof(caddr);
-    caddr.sin_port = htons(UNICAST_PORT);
+    caddr.sin_port = htons(parsed_msg->payload.find_grp_req.reply_port);
 
     /* ignore sendto() error */
     sendto(broadcast_fd, reply_buff, reply_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
@@ -871,9 +882,83 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
     printf("\n");
     free(buff);
 
+    close(recv_fd);
     exit(EXIT_SUCCESS);
   }
 
   free(buff);
   return 0;
+}
+
+/*
+* err_no =  -1 --> error while finding
+*           -2 --> error while sending
+*           -3 ---> error while receiving
+*/
+struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *mc_list, int *err_no)
+{
+  /* ensure that the group is not joined already */
+  if (findGroupByName(grp_name, mc_list) != NULL)
+  {
+    *err_no = -1;
+    printf(">> Group %s already joined.\n\n", grp_name);
+    return NULL;
+  }
+
+  int reply_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (reply_fd == -1)
+  {
+    perror("socket()");
+    *err_no = -3;
+    return NULL;
+  }
+
+  struct sockaddr_in saddr;
+  memset(&saddr, 0, sizeof(saddr));
+  saddr.sin_family = AF_INET;
+  saddr.sin_port = 0;
+  saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  if (bind(reply_fd, (struct sockaddr *)&saddr, (socklen_t)sizeof(saddr)) == -1)
+  {
+    close(reply_fd);
+    perror("bind()");
+    *err_no = -3;
+    return NULL;
+  }
+
+  int slen = sizeof(saddr);
+  if (getsockname(reply_fd, (struct sockaddr *)&saddr, (socklen_t *)&slen) == -1)
+  {
+    close(reply_fd);
+    perror("getsockname()");
+    *err_no = -3;
+    return NULL;
+  }
+
+  /* send broacast message to find the group with given name */
+  struct message req_msg;
+  req_msg.msg_type = FIND_GROUP_REQ;
+  req_msg.payload.find_grp_req.reply_port = saddr.sin_port;
+  strcpy(req_msg.payload.find_grp_req.query, grp_name);
+
+  /* Send the broadcast message */
+  if (findGroupSend(&req_msg) == -1)
+  {
+    perror("findGroupSend()");
+    *err_no = -2;
+    close(reply_fd);
+    return NULL;
+  }
+
+  /* Receive reply */
+  struct message *reply_msg = findGroupRecv(reply_fd, grp_name);
+  if (reply_msg == NULL)
+  {
+    close(reply_fd);
+    return NULL;
+  }
+
+  close(reply_fd);
+  return reply_msg;
 }

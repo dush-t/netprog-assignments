@@ -132,6 +132,7 @@ struct simple_msg
 struct find_grp_req
 {
   char query[GROUP_NAME_LEN];
+  int reply_port;
 };
 
 struct find_grp_reply
@@ -196,12 +197,14 @@ struct multicast_group *findGroupByIpAndPort(char *ip, int port, struct multicas
 
 int findGroupSend(struct message *msg);
 
-struct message *findGroupRecv(int recv_fd);
+struct message *findGroupRecv(int recv_fd, char *grp_name);
 
 int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *mc_list, int broadcast_fd, struct sockaddr_in caddr);
 
 int sendSimpleMessage(struct multicast_group *grp, char *msg);
 
 int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int recv_fd);
+
+struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *mc_list, int *err_no);
 
 #endif
