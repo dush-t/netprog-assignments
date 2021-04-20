@@ -807,64 +807,72 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
   }
 
   /* Receive poll reply from peers */
-  printf(">> Getting replies, please wait...\n\n");
-  fd_set monitor_fd;
-  int option_cnt[NUM_OPTIONS] = {0};
+  printf("\n>> Getting replies, please wait for about %ds...\n\n", POLL_TIMEOUT);
 
-  for (;;)
+  /* create a new process as recvfrom() is blocking and we want the user itself to reply to poll message if recvd */
+  if (fork() == 0)
   {
-    FD_ZERO(&monitor_fd);
-    FD_SET(recv_fd, &monitor_fd);
+    fd_set monitor_fd;
+    int option_cnt[NUM_OPTIONS] = {0};
 
-    struct timeval tv;
-    tv.tv_sec = POLL_TIMEOUT;
-    tv.tv_usec = 0;
-
-    int nready = select(recv_fd + 1, &monitor_fd, NULL, NULL, &tv);
-    if (nready == -1)
+    for (;;)
     {
-      free(buff);
-      return -1;
-    }
-    if (nready == 0)
-    {
-      /* Time expired */
-      break;
-    }
+      FD_ZERO(&monitor_fd);
+      FD_SET(recv_fd, &monitor_fd);
 
-    if (FD_ISSET(recv_fd, &monitor_fd))
-    {
-      struct sockaddr_in caddr;
-      int len = sizeof(caddr);
-      memset(buff, '\0', PACKET_SIZE);
+      struct timeval tv;
+      tv.tv_sec = POLL_TIMEOUT;
+      tv.tv_usec = 0;
 
-      int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
-
-      struct message *recv_msg = deserialize(buff);
-
-      /* ensure that this is a reply for FIND_GROUP */
-      if (recv_msg->msg_type != POLL_REPLY || recv_msg->payload.poll_reply.id != poll_req.id)
+      int nready = select(recv_fd + 1, &monitor_fd, NULL, NULL, &tv);
+      if (nready == -1)
       {
+        free(buff);
+        return -1;
+      }
+      if (nready == 0)
+      {
+        /* Time expired */
+        break;
+      }
+
+      if (FD_ISSET(recv_fd, &monitor_fd))
+      {
+        struct sockaddr_in caddr;
+        int len = sizeof(caddr);
+        memset(buff, '\0', PACKET_SIZE);
+
+        int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+
+        struct message *recv_msg = deserialize(buff);
+
+        /* ensure that this is a reply for FIND_GROUP */
+        if (recv_msg->msg_type != POLL_REPLY || recv_msg->payload.poll_reply.id != poll_req.id)
+        {
+          free(recv_msg);
+          continue;
+        }
+        else
+        {
+          int selected_opt_idx = recv_msg->payload.poll_reply.option;
+          printf(">> %s:%d selected option %d.\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1);
+          option_cnt[selected_opt_idx] += 1;
+        }
+
         free(recv_msg);
-        continue;
       }
-      else
-      {
-        int selected_opt_idx = recv_msg->payload.poll_reply.option;
-        printf(">> %s:%d selected option %d.\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1);
-        option_cnt[selected_opt_idx] += 1;
-      }
-
-      free(recv_msg);
     }
-  }
 
-  printf(">> Final option count: \n");
-  for (int i = 0; i < poll_req.option_cnt; i++)
-  {
-    printf(">> Option %d -> %d\n", i + 1, option_cnt[i]);
+    printf(">> Final option count: \n");
+    for (int i = 0; i < poll_req.option_cnt; i++)
+    {
+      printf(">> Option %d -> %d\n", i + 1, option_cnt[i]);
+    }
+    printf("\n");
+    free(buff);
+
+    exit(EXIT_SUCCESS);
   }
-  printf("\n");
 
   free(buff);
   return 0;

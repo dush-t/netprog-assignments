@@ -102,10 +102,6 @@ int main()
         cleanupAndExit("recvfrom()");
       }
 
-      /* discard request from same IP */
-      if (strcmp(inet_ntoa(caddr.sin_addr), inet_ntoa(broadcast_addr.sin_addr)) == 0)
-        continue;
-
       struct message *parsed_msg = deserialize(msg);
       if (parsed_msg == NULL)
       {
@@ -172,7 +168,6 @@ int main()
       case JOIN_GROUP:
       {
         struct join_grp_cmd cmd = cmd_obj->cmd_type.join_grp_cmd;
-        printf("group name: %s\n", cmd.grp_name);
         /* ensure that the group is not joined already */
         if (findGroupByName(cmd.grp_name, mc_list) != NULL)
         {
@@ -389,12 +384,6 @@ int main()
             cleanupAndExit("recvfrom()");
           }
 
-          /* discard request from same IP */
-          if (strcmp(inet_ntoa(caddr.sin_addr), inet_ntoa(unicast_addr.sin_addr)) == 0)
-          {
-            continue;
-          }
-
           struct message *parsed_msg = deserialize(msg);
           if (parsed_msg == NULL)
           {
@@ -423,7 +412,14 @@ int main()
             int poll_opt_selected;
             for (;;)
             {
-              scanf("%d", &poll_opt_selected);
+              char *buff = (char *)calloc(20, sizeof(char));
+              memset(buff, '\0', 20);
+              int buff_len = 20;
+              getline(&buff, (size_t *)&buff_len, stdin);
+              poll_opt_selected = atoi(buff);
+              if (buff != NULL)
+                free(buff);
+
               if (poll_opt_selected < 1 || poll_opt_selected > poll_req.option_cnt)
               {
                 printf("\nEnter valid option number: ");
