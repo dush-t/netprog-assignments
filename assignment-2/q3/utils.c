@@ -790,12 +790,39 @@ int sendSimpleMessage(struct multicast_group *grp, char *msg)
                 -1 --> error while sending
                 -2 --> error while receiving
 */
-int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int recv_fd)
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
 {
   if (grp == NULL)
   {
     return -1;
   }
+
+  /* create socket for receiving responses */
+  int reply_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (reply_fd == -1)
+  {
+    perror("socket()");
+    return -2;
+  }
+  struct sockaddr_in saddr;
+  memset(&saddr, 0, sizeof(saddr));
+  saddr.sin_family = AF_INET;
+  saddr.sin_port = 0;
+  saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(reply_fd, (struct sockaddr *)&saddr, (socklen_t)sizeof(saddr)) == -1)
+  {
+    close(reply_fd);
+    perror("bind()");
+    return -2;
+  }
+  int slen = sizeof(saddr);
+  if (getsockname(reply_fd, (struct sockaddr *)&saddr, (socklen_t *)&slen) == -1)
+  {
+    close(reply_fd);
+    perror("getsockname()");
+    return -2;
+  }
+  poll_req.reply_port = ntohs(saddr.sin_port);
 
   struct message pkt;
   pkt.msg_type = POLL_REQ;
@@ -812,6 +839,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
   /* Send poll message to group */
   if (sendto(grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr)) == -1)
   {
+    close(reply_fd);
     perror("sendto()");
     free(buff);
     return -1;
@@ -829,13 +857,13 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
     for (;;)
     {
       FD_ZERO(&monitor_fd);
-      FD_SET(recv_fd, &monitor_fd);
+      FD_SET(reply_fd, &monitor_fd);
 
       struct timeval tv;
       tv.tv_sec = POLL_TIMEOUT;
       tv.tv_usec = 0;
 
-      int nready = select(recv_fd + 1, &monitor_fd, NULL, NULL, &tv);
+      int nready = select(reply_fd + 1, &monitor_fd, NULL, NULL, &tv);
       if (nready == -1)
       {
         free(buff);
@@ -847,13 +875,13 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
         break;
       }
 
-      if (FD_ISSET(recv_fd, &monitor_fd))
+      if (FD_ISSET(reply_fd, &monitor_fd))
       {
         struct sockaddr_in caddr;
         int len = sizeof(caddr);
         memset(buff, '\0', PACKET_SIZE);
 
-        int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
+        int n = recvfrom(reply_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
 
         struct message *recv_msg = deserialize(buff);
 
@@ -866,7 +894,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
         else
         {
           int selected_opt_idx = recv_msg->payload.poll_reply.option;
-          printf(">> %s:%d selected option %d.\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1);
+          printf(">> %s:%d selected option %d. Waiting %ds for other replies...\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1, POLL_TIMEOUT);
           option_cnt[selected_opt_idx] += 1;
         }
 
@@ -882,10 +910,11 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int
     printf("\n");
     free(buff);
 
-    close(recv_fd);
+    close(reply_fd);
     exit(EXIT_SUCCESS);
   }
 
+  close(reply_fd);
   free(buff);
   return 0;
 }

@@ -20,7 +20,6 @@
 #define POLL_TIMEOUT 10
 
 #define BROADCAST_REQ_PORT 8000
-#define UNICAST_PORT 8001
 
 #define CREATE_GROUP_STR "create-group"
 #define JOIN_GROUP_STR "join-group"
@@ -148,6 +147,7 @@ struct poll_req
   char que[MESSAGE_LEN];
   char options[NUM_OPTIONS][MESSAGE_LEN];
   int id;
+  int reply_port;
 };
 
 struct poll_reply
@@ -203,7 +203,7 @@ int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *
 
 int sendSimpleMessage(struct multicast_group *grp, char *msg);
 
-int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req, int recv_fd);
+int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req);
 
 struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *mc_list, int *err_no);
 
