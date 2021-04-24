@@ -1097,6 +1097,7 @@ int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LE
   if (connect(sfd, (struct sockaddr *)&caddr, (socklen_t)sizeof(caddr)) == -1)
     return 0;
 
+  printf(">> Sending file %s to %s.\n\n", file_req.file_name, inet_ntoa(caddr.sin_addr));
   struct message reply;
   reply.msg_type = FILE_REPLY;
   char buff[FILE_CHUNK_LEN];
