@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "utils.h"
 
@@ -13,6 +14,7 @@ void cleanupAndExit(char *err);
 void cleanup();
 int getMaxFd();
 void sigIntHandler(int sig_num);
+void sigAlrmHandler(int sig_num);
 
 /* multicast group linked list */
 struct multicast_group_list *mc_list = NULL;
@@ -26,6 +28,9 @@ int file_count = 0;
 
 int main()
 {
+  /* SIGALRM for multicasting file lists at 1min interval */
+  signal(SIGALRM, sigAlrmHandler);
+  alarm(FILE_MULTICAST_INTERVAL);
   /* cleanup on exit through SIGINT */
   signal(SIGINT, sigIntHandler);
 
@@ -77,6 +82,8 @@ int main()
     int nready = select(max_fd + 1, &read_set, NULL, NULL, NULL);
     if (nready == -1)
     {
+      if (errno == EINTR)
+        continue;
       cleanupAndExit("select()");
     }
 
@@ -376,7 +383,7 @@ int main()
 
           if (parsed_msg->msg_type == SIMPLE_MSG)
           {
-            printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, parsed_msg->payload.simple_msg.msg);
+            printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port), parsed_msg->payload.simple_msg.msg);
           }
           else if (parsed_msg->msg_type == POLL_REQ)
           {
@@ -449,6 +456,41 @@ int main()
             struct file_req file_req = parsed_msg->payload.file_req;
             if (requestFileReqHandler(file_req, file_names, file_count, caddr) == -1)
               printf(">> Error: handling file request for %s.\n\n", file_req.file_name);
+          }
+          else if (parsed_msg->msg_type == FILE_LIST_MULTICAST)
+          {
+            printf("rcvd FILE_LIST_MULTICAST\n");
+            struct file_list_multicast file_list_multicast = parsed_msg->payload.file_list_multicast;
+            for (int i = 0; i < file_list_multicast.count; i++)
+            {
+              /* check if the client has file */
+              bool found_file = false;
+              for (int j = 0; j < file_count; j++)
+              {
+                if (strcmp(file_list_multicast.file_list[i], file_names[j]) == 0)
+                {
+                  found_file = true;
+                  break;
+                }
+              }
+
+              /* request file if not found */
+              if (!found_file)
+              {
+                printf(">> Getting file %s.\n", file_list_multicast.file_list[i]);
+                if (requestFileCmdHandler(file_list_multicast.file_list[i], file_names, &file_count, mc_list) != 0)
+                  printf(">> Error while getting file.\n\n");
+              }
+
+              /* pass on the message to my groups */
+              struct multicast_group *mc_group = mc_list->head;
+              while (mc_group)
+              {
+                // if (sendto(mc_group->send_fd, msg, n, 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
+                //   perror("Error while multicasting file list.");
+                mc_group = mc_group->next;
+              }
+            }
           }
           free(parsed_msg);
         }
@@ -537,4 +579,29 @@ void sigIntHandler(int sig_num)
   printf("\nExiting...\n");
   cleanup();
   exit(EXIT_SUCCESS);
+}
+
+void sigAlrmHandler(int sig_num)
+{
+  if (sig_num != SIGALRM)
+    cleanupAndExit("sigAlrmHandler()");
+
+  if (file_count > 0)
+  {
+    struct multicast_group *mc_group = mc_list->head;
+    struct message msg;
+    msg.msg_type = FILE_LIST_MULTICAST;
+    msg.payload.file_list_multicast.count = file_count;
+    for (int i = 0; i < file_count; i++)
+      strcpy(msg.payload.file_list_multicast.file_list[i], file_names[i]);
+
+    while (mc_group)
+    {
+      if (sendto(mc_group->send_fd, &msg, sizeof(msg), 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
+        perror("Error while multicasting file list.");
+      mc_group = mc_group->next;
+    }
+  }
+
+  alarm(FILE_MULTICAST_INTERVAL);
 }

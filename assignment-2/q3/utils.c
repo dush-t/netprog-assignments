@@ -328,7 +328,7 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struc
   recv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
   recv_addr.sin_port = htons(port);
 
-  recv_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  recv_fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (recv_fd == -1)
   {
     perror("[initMulticastGroup] socket()");
@@ -350,7 +350,7 @@ struct multicast_group *initMulticastGroup(char *name, char *ip, int port, struc
     return NULL;
   }
 
-  send_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  send_fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (send_fd == -1)
   {
     close(recv_fd);
@@ -530,10 +530,10 @@ char *serialize(struct message *msg, int *len)
     break;
   }
 
-  case FILE_LIST_BROADCAST:
+  case FILE_LIST_MULTICAST:
   {
-    int sz = sizeof(struct file_list_broadcast);
-    memcpy(res + offset, &(msg->payload.file_list_broadcast), sz);
+    int sz = sizeof(struct file_list_multicast);
+    memcpy(res + offset, &(msg->payload.file_list_multicast), sz);
     offset += sz;
     break;
   }
@@ -597,9 +597,9 @@ struct message *deserialize(char *msg)
     break;
   }
 
-  case FILE_LIST_BROADCAST:
+  case FILE_LIST_MULTICAST:
   {
-    memcpy(&(msg_obj->payload.file_list_broadcast), msg + offset, sizeof(struct file_list_broadcast));
+    memcpy(&(msg_obj->payload.file_list_multicast), msg + offset, sizeof(struct file_list_multicast));
     break;
   }
 
@@ -914,6 +914,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
   /* create a new process as recvfrom() is blocking and we want the user itself to reply to poll message if recvd */
   if (fork() == 0)
   {
+    signal(SIGALRM, SIG_IGN);
     fd_set monitor_fd;
     int option_cnt[NUM_OPTIONS] = {0};
 
@@ -957,7 +958,7 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
         else
         {
           int selected_opt_idx = recv_msg->payload.poll_reply.option;
-          printf(">> %s:%d selected option %d. Waiting %ds for other replies...\n", inet_ntoa(caddr.sin_addr), caddr.sin_port, selected_opt_idx + 1, POLL_TIMEOUT);
+          printf(">> %s:%d selected option %d. Waiting %ds for other replies...\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port), selected_opt_idx + 1, POLL_TIMEOUT);
           option_cnt[selected_opt_idx] += 1;
         }
 
@@ -1190,6 +1191,7 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
   /* child listens for TCP requests */
   if (fork() == 0)
   {
+    signal(SIGALRM, SIG_IGN);
     free(buff);
 
     struct sockaddr_in caddr;

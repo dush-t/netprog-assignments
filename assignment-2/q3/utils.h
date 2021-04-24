@@ -25,7 +25,8 @@
 #define FILE_NAME_LEN 20
 #define MAX_FILE_ALLOWED 30
 #define REQ_FILE_TIMEOUT 10
-#define FILE_CHUNK_LEN 100
+#define FILE_CHUNK_LEN 500
+#define FILE_MULTICAST_INTERVAL 5
 
 #define BROADCAST_REQ_PORT 8000
 
@@ -143,7 +144,7 @@ enum message_type
   POLL_REQ,
   POLL_REPLY,
   FILE_REQ,
-  FILE_LIST_BROADCAST,
+  FILE_LIST_MULTICAST,
   FILE_REPLY
 };
 
@@ -185,7 +186,7 @@ struct file_req
   int port;
 };
 
-struct file_list_broadcast
+struct file_list_multicast
 {
   char file_list[MAX_FILE_ALLOWED][FILE_NAME_LEN];
   int count;
@@ -209,7 +210,7 @@ struct message
     struct poll_req poll_req;
     struct poll_reply poll_reply;
     struct file_req file_req;
-    struct file_list_broadcast file_list_broadcast;
+    struct file_list_multicast file_list_multicast;
     struct file_reply file_reply;
   } payload;
 };

@@ -167,7 +167,7 @@ void *connectionHandler(void *args)
     }
     buff[num_read] = '\0';
 
-    printf("\n-> Command received from client %s:%d - %s\n", client_ip, caddr.sin_port, buff);
+    printf("\n-> Command received from client %s:%d - %s\n", client_ip, ntohs(caddr.sin_port), buff);
 
     if (strcmp(buff, "nodes") == 0)
     {
