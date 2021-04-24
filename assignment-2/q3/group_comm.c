@@ -461,7 +461,7 @@ int main()
           {
             printf("rcvd FILE_LIST_MULTICAST\n");
             struct file_list_multicast file_list_multicast = parsed_msg->payload.file_list_multicast;
-            for (int i = 0; i < file_list_multicast.count; i++)
+            for (int i = 0; i < file_list_multicast.file_count; i++)
             {
               /* check if the client has file */
               bool found_file = false;
@@ -486,8 +486,28 @@ int main()
               struct multicast_group *mc_group = mc_list->head;
               while (mc_group)
               {
-                // if (sendto(mc_group->send_fd, msg, n, 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
-                //   perror("Error while multicasting file list.");
+                /* check if msg already sent to the group */
+                bool found_group = false;
+                for (int i = 0; i < file_list_multicast.grp_count; i++)
+                {
+                  if (strcmp(file_list_multicast.groups[i], mc_group->name) == 0)
+                  {
+                    found_group = true;
+                    break;
+                  }
+                }
+                if (found_group)
+                {
+                  mc_group = mc_group->next;
+                  continue;
+                }
+                if (file_list_multicast.grp_count >= MAX_GROUPS)
+                  break;
+
+                strcpy(parsed_msg->payload.file_list_multicast.groups[file_list_multicast.grp_count], mc_group->name);
+                parsed_msg->payload.file_list_multicast.grp_count += 1;
+                if (sendto(mc_group->send_fd, parsed_msg, sizeof(struct message), 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
+                  perror("Error while multicasting file list.");
                 mc_group = mc_group->next;
               }
             }
@@ -591,10 +611,22 @@ void sigAlrmHandler(int sig_num)
     struct multicast_group *mc_group = mc_list->head;
     struct message msg;
     msg.msg_type = FILE_LIST_MULTICAST;
-    msg.payload.file_list_multicast.count = file_count;
+    msg.payload.file_list_multicast.file_count = file_count;
     for (int i = 0; i < file_count; i++)
       strcpy(msg.payload.file_list_multicast.file_list[i], file_names[i]);
 
+    int cnt = 0;
+    while (mc_group)
+    {
+      if (cnt == MAX_GROUPS)
+        cleanupAndExit("max groups exceeded");
+      strcpy(msg.payload.file_list_multicast.groups[cnt], mc_group->name);
+      cnt++;
+      mc_group = mc_group->next;
+    }
+    msg.payload.file_list_multicast.grp_count = cnt;
+
+    mc_group = mc_list->head;
     while (mc_group)
     {
       if (sendto(mc_group->send_fd, &msg, sizeof(msg), 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)

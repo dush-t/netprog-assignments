@@ -18,7 +18,7 @@
 #define MESSAGE_LEN 100
 #define NUM_OPTIONS 5
 #define COMMAND_LEN 1024
-#define MAX_GROUPS 5
+#define MAX_GROUPS 20
 #define PACKET_SIZE 1024
 #define FIND_GROUP_TIMEOUT 5
 #define POLL_TIMEOUT 10
@@ -189,7 +189,9 @@ struct file_req
 struct file_list_multicast
 {
   char file_list[MAX_FILE_ALLOWED][FILE_NAME_LEN];
-  int count;
+  char groups[MAX_GROUPS][GROUP_NAME_LEN];
+  int file_count;
+  int grp_count;
 };
 
 struct file_reply
