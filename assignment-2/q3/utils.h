@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <sys/wait.h>
 
 #define GROUP_NAME_LEN 20
 #define IP_LEN 20
