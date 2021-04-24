@@ -1094,8 +1094,7 @@ int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LE
 
   caddr.sin_port = htons(file_req.port);
   /* ignore connect error */
-  int cfd = connect(sfd, (struct sockaddr *)&caddr, (socklen_t)sizeof(caddr));
-  if (cfd == -1)
+  if (connect(sfd, (struct sockaddr *)&caddr, (socklen_t)sizeof(caddr)) == -1)
     return 0;
 
   struct message reply;
@@ -1118,7 +1117,9 @@ int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LE
       strcpy(reply.payload.file_reply.data, buff);
     }
 
-    send(cfd, &reply, sizeof(reply), 0);
+    if (send(sfd, &reply, sizeof(reply), 0) == -1)
+      return -1;
+
     if (nread == 0)
       break;
   }
@@ -1222,7 +1223,7 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
       char file_path[100];
       strcpy(file_path, FILE_DIR);
       strcat(file_path, file_name);
-      int fd = open(file_path, O_WRONLY | O_CREAT);
+      int fd = open(file_path, O_WRONLY | O_CREAT, 0700);
       if (fd == -1)
       {
         perror("open()");
@@ -1234,18 +1235,21 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
         int n = read(connfd, &res, sizeof(res));
         if (n < 0)
         {
+          remove(file_path);
           perror("read() error");
           exit(EXIT_FAILURE);
         }
 
         if (res.msg_type != FILE_REPLY)
         {
+          remove(file_path);
           perror("read() unexpected reply");
           exit(EXIT_FAILURE);
         }
 
         if (write(fd, res.payload.file_reply.data, res.payload.file_reply.len) == -1)
         {
+          remove(file_path);
           perror("write() error");
           exit(EXIT_FAILURE);
         }
