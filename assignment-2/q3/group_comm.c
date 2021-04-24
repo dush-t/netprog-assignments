@@ -444,6 +444,12 @@ int main()
             close(sfd);
             free(buff);
           }
+          else if (parsed_msg->msg_type == FILE_REQ)
+          {
+            struct file_req file_req = parsed_msg->payload.file_req;
+            if (requestFileReqHandler(file_req, file_names, file_count, caddr) == -1)
+              printf(">> Error: handling file request for %s.\n\n", file_req.file_name);
+          }
           free(parsed_msg);
         }
       }

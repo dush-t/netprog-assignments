@@ -254,6 +254,8 @@ struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *
 
 int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *file_count, struct multicast_group_list *mc_list);
 
+int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LEN], int file_count, struct sockaddr_in caddr);
+
 int getFileList(char files[][FILE_NAME_LEN], int *count);
 
 #endif

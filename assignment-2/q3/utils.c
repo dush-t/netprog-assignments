@@ -1055,6 +1055,10 @@ struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *
   return reply_msg;
 }
 
+/*
+* Return -1: error
+*         0: success
+*/
 int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LEN], int file_count, struct sockaddr_in caddr)
 {
   /* check if the file exists */
