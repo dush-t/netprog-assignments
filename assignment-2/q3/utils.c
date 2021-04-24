@@ -1224,7 +1224,7 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
         perror("open()");
         exit(EXIT_FAILURE);
       }
-      struct file_reply res;
+      struct message res;
       for (;;)
       {
         int n = read(connfd, &res, sizeof(res));
@@ -1234,13 +1234,19 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
           exit(EXIT_FAILURE);
         }
 
-        if (write(fd, res.data, res.len) == -1)
+        if (res.msg_type != FILE_REPLY)
+        {
+          perror("read() unexpected reply");
+          exit(EXIT_FAILURE);
+        }
+
+        if (write(fd, res.payload.file_reply.data, res.payload.file_reply.len) == -1)
         {
           perror("write() error");
           exit(EXIT_FAILURE);
         }
 
-        if (res.is_last)
+        if (res.payload.file_reply.is_last)
           break;
       }
     }
