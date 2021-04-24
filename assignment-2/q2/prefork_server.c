@@ -187,14 +187,13 @@ start_worker() {
             perror("accept");
             return -1;
         }
-        printf("worker %d Got new request\n", pid);
 
         // Send GOT_REQUEST message, and then serve the request
         ControlMsg cmsg;
         cmsg.pid = pid;
         cmsg.reqs_handled = reqs_handled;
         cmsg.type = GOT_REQUEST;
-        printf("server_addr = %s\n", &(server_addr.sun_path[1]));
+        // printf("server_addr = %s\n", &(server_addr.sun_path[1]));
         if (sendto(localsock, (char*)&cmsg, sizeof(cmsg), 0, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
             perror("worker got request sendto");
             return -1;
@@ -203,8 +202,8 @@ start_worker() {
         printf("Child [PID = %d]: Accepted connection from %s:%d\n",
                 pid, inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port));
 
-        char reply[8];
-        strcpy(reply, "OK");
+        char reply[32];
+        sprintf(reply, "Worker %d says OK", pid);
         if (send(csock, reply, sizeof(reply), 0) < 0) {
             perror("worker tcp send");
             return -1;
