@@ -155,6 +155,29 @@ struct command *parseCommand(char *raw_cmd)
   {
     command_obj->cmd_name = EXIT_CMD;
   }
+  else if (strcmp(cmd_name, LIST_FILES_STR) == 0)
+  {
+    command_obj->cmd_name = LIST_FILES;
+  }
+  else if (strcmp(cmd_name, REQUEST_FILE_STR) == 0)
+  {
+    command_obj->cmd_name = REQUEST_FILE;
+    char *file_name = strtok(NULL, " ");
+    if (file_name == NULL)
+    {
+      free(command_obj);
+      return NULL;
+    }
+
+    if (strlen(file_name) > FILE_NAME_LEN)
+    {
+      perror("File name length is greater than allowed.");
+      free(command_obj);
+      return NULL;
+    }
+
+    strcpy(command_obj->cmd_type.request_file_cmd.file_name, file_name);
+  }
   else
   {
     free(command_obj);
@@ -224,6 +247,18 @@ void printCommand(struct command *command_obj)
   case LIST_GROUPS:
   {
     printf("list-groups\n");
+    break;
+  }
+
+  case LIST_FILES:
+  {
+    printf("list-files\n");
+    break;
+  }
+
+  case REQUEST_FILE:
+  {
+    printf("request-file %s\n", command_obj->cmd_type.request_file_cmd.file_name);
     break;
   }
 
@@ -487,6 +522,22 @@ char *serialize(struct message *msg, int *len)
     break;
   }
 
+  case FILE_REQ:
+  {
+    int sz = sizeof(struct file_req);
+    memcpy(res + offset, &(msg->payload.file_req), sz);
+    offset += sz;
+    break;
+  }
+
+  case FILE_LIST_BROADCAST:
+  {
+    int sz = sizeof(struct file_list_broadcast);
+    memcpy(res + offset, &(msg->payload.file_list_broadcast), sz);
+    offset += sz;
+    break;
+  }
+
   default:
     perror("Message type not recognized.");
     return NULL;
@@ -537,6 +588,18 @@ struct message *deserialize(char *msg)
   case POLL_REPLY:
   {
     memcpy(&(msg_obj->payload.poll_reply), msg + offset, sizeof(struct poll_reply));
+    break;
+  }
+
+  case FILE_REQ:
+  {
+    memcpy(&(msg_obj->payload.file_req), msg + offset, sizeof(struct file_req));
+    break;
+  }
+
+  case FILE_LIST_BROADCAST:
+  {
+    memcpy(&(msg_obj->payload.file_list_broadcast), msg + offset, sizeof(struct file_list_broadcast));
     break;
   }
 
@@ -990,4 +1053,270 @@ struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *
 
   close(reply_fd);
   return reply_msg;
+}
+
+int requestFileReqHandler(struct file_req file_req, char my_files[][FILE_NAME_LEN], int file_count, struct sockaddr_in caddr)
+{
+  /* check if the file exists */
+  bool found_file = false;
+  for (int i = 0; i < file_count; i++)
+  {
+    if (strcmp(my_files[i], file_req.file_name) == 0)
+    {
+      found_file = true;
+      break;
+    }
+  }
+  if (!found_file)
+    return 0;
+
+  char file_path[100];
+  strcpy(file_path, FILE_DIR);
+  strcat(file_path, file_req.file_name);
+  int file_fd = open(file_path, O_RDONLY);
+  if (file_fd == -1)
+  {
+    perror("[requestFileReqHandler] open()");
+    return -1;
+  }
+
+  int sfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sfd == -1)
+  {
+    perror("[requestFileReqHandler] socket()");
+    close(file_fd);
+    return -1;
+  }
+
+  caddr.sin_port = htons(file_req.port);
+  /* ignore connect error */
+  int cfd = connect(sfd, (struct sockaddr *)&caddr, (socklen_t)sizeof(caddr));
+  if (cfd == -1)
+    return 0;
+
+  struct message reply;
+  reply.msg_type = FILE_REPLY;
+  char buff[FILE_CHUNK_LEN];
+  int nread;
+  for (;;)
+  {
+    memset(buff, '\0', sizeof(buff));
+    nread = read(file_fd, buff, FILE_CHUNK_LEN);
+    if (nread == 0)
+    {
+      reply.payload.file_reply.is_last = true;
+      reply.payload.file_reply.len = 0;
+      strcpy(reply.payload.file_reply.data, "\0");
+    }
+    else
+    {
+      reply.payload.file_reply.len = nread;
+      strcpy(reply.payload.file_reply.data, buff);
+    }
+
+    send(cfd, &reply, sizeof(reply), 0);
+    if (nread == 0)
+      break;
+  }
+
+  return 0;
+}
+
+/*
+* Return:
+*     -1 -> file name already exists
+*     -2 -> error while receiving
+*     -3 -> error while sending
+*     -4 -> max files reached
+*/
+int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *file_count, struct multicast_group_list *mc_list)
+{
+  /* ensure that file does not already exist */
+  for (int i = 0; i < *file_count; i++)
+  {
+    if (strcmp(my_files[i], file_name) == 0)
+      return -1;
+  }
+
+  if (*file_count == MAX_FILE_ALLOWED)
+    return -4;
+
+  /* create TCP socket for receiving file response */
+  int sfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sfd == -1)
+  {
+    perror("socket()");
+    return -2;
+  }
+  struct sockaddr_in saddr;
+  memset(&saddr, 0, sizeof(saddr));
+  saddr.sin_family = AF_INET;
+  saddr.sin_port = 0;
+  saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(sfd, (struct sockaddr *)&saddr, (socklen_t)sizeof(saddr)) == -1)
+  {
+    close(sfd);
+    perror("bind()");
+    return -2;
+  }
+  int slen = sizeof(saddr);
+  if (getsockname(sfd, (struct sockaddr *)&saddr, (socklen_t *)&slen) == -1)
+  {
+    close(sfd);
+    perror("getsockname()");
+    return -2;
+  }
+  if (listen(sfd, 5) == -1)
+  {
+    close(sfd);
+    perror("listen()");
+    return -2;
+  }
+
+  struct message msg;
+  msg.msg_type = FILE_REQ;
+  strcpy(msg.payload.file_req.file_name, file_name);
+  msg.payload.file_req.port = ntohs(saddr.sin_port);
+
+  int buff_len;
+  char *buff = serialize(&msg, &buff_len);
+
+  /* child listens for TCP requests */
+  if (fork() == 0)
+  {
+    free(buff);
+
+    struct sockaddr_in caddr;
+    int clen = sizeof(caddr);
+    memset(&caddr, 0, clen);
+
+    fd_set fdset;
+    FD_ZERO(&fdset);
+    FD_SET(sfd, &fdset);
+
+    struct timeval tv;
+    tv.tv_sec = REQ_FILE_TIMEOUT;
+    tv.tv_usec = 0;
+
+    int nready = select(sfd + 1, &fdset, NULL, NULL, &tv);
+    if (nready == -1)
+    {
+      close(sfd);
+      perror("select() error while receiving file");
+      exit(EXIT_FAILURE);
+    }
+    if (nready == 0)
+    {
+      /* timed out */
+      printf(">> No response for file %s received within %d seconds.\n\n", file_name, REQ_FILE_TIMEOUT);
+      exit(EXIT_FAILURE);
+    }
+
+    if (FD_ISSET(sfd, &fdset))
+    {
+      int connfd = accept(sfd, (struct sockaddr *)&caddr, (socklen_t *)&clen);
+      char file_path[100];
+      strcpy(file_path, FILE_DIR);
+      strcat(file_path, file_name);
+      int fd = open(file_path, O_WRONLY | O_CREAT);
+      if (fd == -1)
+      {
+        perror("open()");
+        exit(EXIT_FAILURE);
+      }
+      struct file_reply res;
+      for (;;)
+      {
+        int n = read(connfd, &res, sizeof(res));
+        if (n < 0)
+        {
+          perror("read() error");
+          exit(EXIT_FAILURE);
+        }
+
+        if (write(fd, res.data, res.len) == -1)
+        {
+          perror("write() error");
+          exit(EXIT_FAILURE);
+        }
+
+        if (res.is_last)
+          break;
+      }
+    }
+
+    printf(">> Received file %s.\n\n", file_name);
+    close(sfd);
+    exit(EXIT_SUCCESS);
+  }
+  /* parent multicasts to all groups */
+  else
+  {
+    close(sfd);
+    struct multicast_group *curr_grp = mc_list->head;
+
+    while (curr_grp)
+    {
+      sendto(curr_grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(curr_grp->send_addr), (socklen_t)sizeof(struct sockaddr_in));
+      curr_grp = curr_grp->next;
+    }
+
+    free(buff);
+
+    int status;
+    wait(&status);
+    if (WIFEXITED(status))
+    {
+      if (WEXITSTATUS(status) == EXIT_SUCCESS)
+      {
+        strcpy(my_files[*file_count], file_name);
+        *file_count += 1;
+        return 0;
+      }
+      else
+      {
+        return -2;
+      }
+    }
+    else
+    {
+      return -2;
+    }
+  }
+}
+
+int getFileList(char files[][FILE_NAME_LEN], int *count)
+{
+  struct stat st = {0};
+
+  /* create dir if it doesn't exist */
+  if (stat(FILE_DIR, &st) == -1)
+  {
+    if (mkdir(FILE_DIR, 0700) == -1)
+    {
+      perror("mkdir()");
+      return -1;
+    }
+  }
+
+  DIR *d;
+  struct dirent *dir;
+  d = opendir(FILE_DIR);
+  if (d == NULL)
+  {
+    perror("opendir");
+    return -1;
+  }
+
+  while ((dir = readdir(d)) != NULL)
+  {
+    if (dir->d_type == DT_REG)
+    {
+      strcpy(files[*count], dir->d_name);
+      (*count)++;
+    }
+  }
+  closedir(d);
+
+  return 0;
 }

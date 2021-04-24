@@ -8,6 +8,9 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 #define GROUP_NAME_LEN 20
 #define IP_LEN 20
@@ -18,6 +21,10 @@
 #define PACKET_SIZE 1024
 #define FIND_GROUP_TIMEOUT 5
 #define POLL_TIMEOUT 10
+#define FILE_NAME_LEN 20
+#define MAX_FILE_ALLOWED 30
+#define REQ_FILE_TIMEOUT 10
+#define FILE_CHUNK_LEN 100
 
 #define BROADCAST_REQ_PORT 8000
 
@@ -28,8 +35,12 @@
 #define SEND_MESSAGE_STR "send-message"
 #define INIT_POLL_STR "init-poll"
 #define LIST_GROUPS_STR "list-groups"
+#define LIST_FILES_STR "list-files"
+#define REQUEST_FILE_STR "request-file"
 #define EXIT_CMD_STR "exit"
 #define HELP_CMD_STR "help"
+
+#define FILE_DIR "files/"
 
 enum cmds
 {
@@ -40,6 +51,8 @@ enum cmds
   SEND_MESSAGE,
   INIT_POLL,
   LIST_GROUPS,
+  LIST_FILES,
+  REQUEST_FILE,
   HELP_CMD,
   EXIT_CMD
 };
@@ -80,6 +93,11 @@ struct init_poll_cmd
   int option_cnt;
 };
 
+struct request_file_cmd
+{
+  char file_name[FILE_NAME_LEN];
+};
+
 struct command
 {
   enum cmds cmd_name;
@@ -91,6 +109,7 @@ struct command
     struct find_grp_cmd find_grp_cmd;
     struct send_msg_cmd send_msg_cmd;
     struct init_poll_cmd init_poll_cmd;
+    struct request_file_cmd request_file_cmd;
   } cmd_type;
 };
 
@@ -121,7 +140,10 @@ enum message_type
   FIND_GROUP_REQ,
   FIND_GROUP_REPLY,
   POLL_REQ,
-  POLL_REPLY
+  POLL_REPLY,
+  FILE_REQ,
+  FILE_LIST_BROADCAST,
+  FILE_REPLY
 };
 
 struct simple_msg
@@ -156,6 +178,25 @@ struct poll_reply
   int id;
 };
 
+struct file_req
+{
+  char file_name[FILE_NAME_LEN];
+  int port;
+};
+
+struct file_list_broadcast
+{
+  char file_list[MAX_FILE_ALLOWED][FILE_NAME_LEN];
+  int count;
+};
+
+struct file_reply
+{
+  bool is_last;
+  char data[FILE_CHUNK_LEN];
+  int len;
+};
+
 struct message
 {
   enum message_type msg_type;
@@ -166,6 +207,9 @@ struct message
     struct find_grp_reply find_grp_reply;
     struct poll_req poll_req;
     struct poll_reply poll_reply;
+    struct file_req file_req;
+    struct file_list_broadcast file_list_broadcast;
+    struct file_reply file_reply;
   } payload;
 };
 
@@ -206,5 +250,9 @@ int sendSimpleMessage(struct multicast_group *grp, char *msg);
 int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req);
 
 struct message *handleFindGroupCmd(char *grp_name, struct multicast_group_list *mc_list, int *err_no);
+
+int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *file_count, struct multicast_group_list *mc_list);
+
+int getFileList(char files[][FILE_NAME_LEN], int *count);
 
 #endif

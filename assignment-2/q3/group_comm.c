@@ -20,11 +20,18 @@ struct multicast_group_list *mc_list = NULL;
 struct command *cmd_obj = NULL;
 /* fd for receiving broadcast msgs */
 int broadcast_fd = -1;
+/* my file names */
+char file_names[MAX_FILE_ALLOWED][FILE_NAME_LEN];
+int file_count = 0;
 
 int main()
 {
   /* cleanup on exit through SIGINT */
   signal(SIGINT, sigIntHandler);
+
+  /* get list of files */
+  if (getFileList(file_names, &file_count) == -1)
+    cleanupAndExit("getFileList()");
 
   printf("\n##### WELCOME TO GROUP CHAT APPLICATION #####\n");
   printCommands(); /* print available commands to user */
@@ -296,6 +303,32 @@ int main()
         break;
       }
 
+      case LIST_FILES:
+      {
+        for (int i = 0; i < file_count; i++)
+        {
+          printf(">> %d. %s\n", i + 1, file_names[i]);
+        }
+        printf("\n");
+        break;
+      }
+
+      case REQUEST_FILE:
+      {
+        struct request_file_cmd request_file_cmd = cmd_obj->cmd_type.request_file_cmd;
+        int res = requestFileCmdHandler(request_file_cmd.file_name, file_names, &file_count, mc_list);
+
+        if (res == -1)
+          printf(">> File name already exists.\n\n");
+        else if (res == -2)
+          printf(">> Error while receiving file.\n\n");
+        else if (res == -3)
+          printf(">> Error while sending file.\n\n");
+        else if (res == -4)
+          printf(">> Error: File buffer overflow.\n\n");
+        break;
+      }
+
       case HELP_CMD:
       {
         printCommands();
@@ -430,6 +463,8 @@ void printCommands()
   printf("\n> list-groups");
   printf("\n> send-message [GROUP_NAME] \"[MESSAGE]\"");
   printf("\n> init-poll [GROUP_NAME] \"[QUESTION]\" [OPTION_COUNT] \"[OPTION_1]\" \"[OPTION_2]\"...");
+  printf("\n> list-files");
+  printf("\n> request-file [FILE_NAME]");
   printf("\n> help");
   printf("\n> exit\n\n");
 }
