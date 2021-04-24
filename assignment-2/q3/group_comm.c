@@ -459,7 +459,6 @@ int main()
           }
           else if (parsed_msg->msg_type == FILE_LIST_MULTICAST)
           {
-            printf("rcvd FILE_LIST_MULTICAST\n");
             struct file_list_multicast file_list_multicast = parsed_msg->payload.file_list_multicast;
             for (int i = 0; i < file_list_multicast.file_count; i++)
             {
