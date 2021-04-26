@@ -91,30 +91,22 @@ int main()
     if (FD_ISSET(broadcast_fd, &read_set))
     {
       /* received broadcast message */
-      char msg[PACKET_SIZE];
+      struct message parsed_msg;
       struct sockaddr_in caddr;
       memset(&caddr, 0, sizeof(caddr));
       int clen = sizeof(caddr);
 
-      int n = recvfrom(broadcast_fd, msg, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&clen);
+      int n = recvfrom(broadcast_fd, &parsed_msg, sizeof(parsed_msg), 0, (struct sockaddr *)&caddr, (socklen_t *)&clen);
       if (n < 0)
       {
         cleanupAndExit("recvfrom()");
       }
 
-      struct message *parsed_msg = deserialize(msg);
-      if (parsed_msg == NULL)
+      if (parsed_msg.msg_type == FIND_GROUP_REQ)
       {
-        printf(">> Error: Could not parse received message.\n\n");
-        break;
-      }
-      if (parsed_msg->msg_type == FIND_GROUP_REQ)
-      {
-        if (handleFindGroupReq(parsed_msg, mc_list, broadcast_fd, caddr) == -1)
+        if (handleFindGroupReq(&parsed_msg, mc_list, broadcast_fd, caddr) == -1)
           printf(">> Error: error occurred while handling find group request.\n\n");
       }
-
-      free(parsed_msg);
     }
 
     if (FD_ISSET(STDIN_FILENO, &read_set))
@@ -363,31 +355,24 @@ int main()
         if (FD_ISSET(curr_mc_grp->recv_fd, &read_set))
         {
           /* received multicast message */
-          char msg[PACKET_SIZE];
+          struct message parsed_msg;
           struct sockaddr_in caddr;
           memset(&caddr, 0, sizeof(caddr));
           int clen = sizeof(caddr);
 
-          int n = recvfrom(curr_mc_grp->recv_fd, msg, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&clen);
+          int n = recvfrom(curr_mc_grp->recv_fd, &parsed_msg, sizeof(parsed_msg), 0, (struct sockaddr *)&caddr, (socklen_t *)&clen);
           if (n < 0)
           {
             cleanupAndExit("recvfrom()");
           }
 
-          struct message *parsed_msg = deserialize(msg);
-          if (parsed_msg == NULL)
+          if (parsed_msg.msg_type == SIMPLE_MSG)
           {
-            printf("Error: Could not parse received message.\n\n");
-            continue;
+            printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port), parsed_msg.payload.simple_msg.msg);
           }
-
-          if (parsed_msg->msg_type == SIMPLE_MSG)
+          else if (parsed_msg.msg_type == POLL_REQ)
           {
-            printf(">> Received from %s:%d\n>> %s\n\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port), parsed_msg->payload.simple_msg.msg);
-          }
-          else if (parsed_msg->msg_type == POLL_REQ)
-          {
-            struct poll_req poll_req = parsed_msg->payload.poll_req;
+            struct poll_req poll_req = parsed_msg.payload.poll_req;
 
             /* Print poll */
             printf(">> Please vote for the poll - \n");
@@ -426,19 +411,10 @@ int main()
             poll_reply_msg.payload.poll_reply.id = poll_req.id;
             poll_reply_msg.payload.poll_reply.option = poll_opt_selected - 1; // since poll_opt_selected would be 1 based
 
-            int buff_len;
-            char *buff = serialize(&poll_reply_msg, &buff_len);
-            if (buff == NULL)
-            {
-              printf(">> Error while sending poll reply.\n\n");
-              continue;
-            }
-
             int sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
             if (sfd == -1)
             {
               perror("socket()");
-              free(buff);
               printf(">> Error while sending poll reply.\n\n");
               continue;
             }
@@ -446,20 +422,19 @@ int main()
             /* ignore sendto() error as the listener might have stopped listening & closed socket */
             caddr.sin_port = htons(poll_req.reply_port);
             clen = sizeof(caddr);
-            sendto(sfd, buff, buff_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
+            sendto(sfd, &poll_reply_msg, sizeof(poll_reply_msg), 0, (struct sockaddr *)&caddr, (socklen_t)clen);
 
             close(sfd);
-            free(buff);
           }
-          else if (parsed_msg->msg_type == FILE_REQ)
+          else if (parsed_msg.msg_type == FILE_REQ)
           {
-            struct file_req file_req = parsed_msg->payload.file_req;
+            struct file_req file_req = parsed_msg.payload.file_req;
             if (requestFileReqHandler(file_req, file_names, file_count, caddr) == -1)
               printf(">> Error: handling file request for %s.\n\n", file_req.file_name);
           }
-          else if (parsed_msg->msg_type == FILE_LIST_MULTICAST)
+          else if (parsed_msg.msg_type == FILE_LIST_MULTICAST)
           {
-            struct file_list_multicast file_list_multicast = parsed_msg->payload.file_list_multicast;
+            struct file_list_multicast file_list_multicast = parsed_msg.payload.file_list_multicast;
             for (int i = 0; i < file_list_multicast.file_count; i++)
             {
               /* check if the client has file */
@@ -503,15 +478,14 @@ int main()
                 if (file_list_multicast.grp_count >= MAX_GROUPS)
                   break;
 
-                strcpy(parsed_msg->payload.file_list_multicast.groups[file_list_multicast.grp_count], mc_group->name);
-                parsed_msg->payload.file_list_multicast.grp_count += 1;
-                if (sendto(mc_group->send_fd, parsed_msg, sizeof(struct message), 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
+                strcpy(parsed_msg.payload.file_list_multicast.groups[file_list_multicast.grp_count], mc_group->name);
+                parsed_msg.payload.file_list_multicast.grp_count += 1;
+                if (sendto(mc_group->send_fd, &parsed_msg, sizeof(parsed_msg), 0, (struct sockaddr *)&(mc_group->send_addr), (socklen_t)sizeof(mc_group->send_addr)) == -1)
                   perror("Error while multicasting file list.");
                 mc_group = mc_group->next;
               }
             }
           }
-          free(parsed_msg);
         }
       }
     }

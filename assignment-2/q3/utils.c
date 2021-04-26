@@ -466,152 +466,6 @@ int max(int num1, int num2)
   return (num1 > num2) ? num1 : num2;
 }
 
-char *serialize(struct message *msg, int *len)
-{
-  char *res = (char *)calloc(PACKET_SIZE, sizeof(char));
-  if (res == NULL)
-  {
-    perror("calloc");
-    return NULL;
-  }
-  memset(res, '\0', PACKET_SIZE);
-
-  int offset = 0;
-  memcpy(res + offset, &(msg->msg_type), sizeof(enum message_type));
-  offset += sizeof(enum message_type);
-
-  switch (msg->msg_type)
-  {
-  case SIMPLE_MSG:
-  {
-    int sz = sizeof(struct simple_msg);
-    memcpy(res + offset, &(msg->payload.simple_msg), sz);
-    offset += sz;
-    break;
-  }
-
-  case FIND_GROUP_REQ:
-  {
-    int sz = sizeof(struct find_grp_req);
-    memcpy(res + offset, &(msg->payload.find_grp_req), sz);
-    offset += sz;
-    break;
-  }
-
-  case FIND_GROUP_REPLY:
-  {
-    int sz = sizeof(struct find_grp_reply);
-    memcpy(res + offset, &(msg->payload.find_grp_reply), sz);
-    offset += sz;
-    break;
-  }
-
-  case POLL_REQ:
-  {
-    int sz = sizeof(struct poll_req);
-    memcpy(res + offset, &(msg->payload.poll_req), sz);
-    offset += sz;
-    break;
-  }
-
-  case POLL_REPLY:
-  {
-    int sz = sizeof(struct poll_reply);
-    memcpy(res + offset, &(msg->payload.poll_reply), sz);
-    offset += sz;
-    break;
-  }
-
-  case FILE_REQ:
-  {
-    int sz = sizeof(struct file_req);
-    memcpy(res + offset, &(msg->payload.file_req), sz);
-    offset += sz;
-    break;
-  }
-
-  case FILE_LIST_MULTICAST:
-  {
-    int sz = sizeof(struct file_list_multicast);
-    memcpy(res + offset, &(msg->payload.file_list_multicast), sz);
-    offset += sz;
-    break;
-  }
-
-  default:
-    perror("Message type not recognized.");
-    return NULL;
-    break;
-  }
-
-  *len = offset;
-  return res;
-}
-
-struct message *deserialize(char *msg)
-{
-  struct message *msg_obj = (struct message *)calloc(1, sizeof(struct message));
-
-  int msg_type;
-  int offset = 0;
-  memcpy(&msg_type, msg + offset, sizeof(int));
-  offset += sizeof(int);
-
-  msg_obj->msg_type = msg_type;
-
-  switch (msg_type)
-  {
-  case SIMPLE_MSG:
-  {
-    memcpy(&(msg_obj->payload.simple_msg), msg + offset, sizeof(struct simple_msg));
-    break;
-  }
-
-  case FIND_GROUP_REQ:
-  {
-    memcpy(&(msg_obj->payload.find_grp_req), msg + offset, sizeof(struct find_grp_req));
-    break;
-  }
-
-  case FIND_GROUP_REPLY:
-  {
-    memcpy(&(msg_obj->payload.find_grp_reply), msg + offset, sizeof(struct find_grp_reply));
-    break;
-  }
-
-  case POLL_REQ:
-  {
-    memcpy(&(msg_obj->payload.poll_req), msg + offset, sizeof(struct poll_req));
-    break;
-  }
-
-  case POLL_REPLY:
-  {
-    memcpy(&(msg_obj->payload.poll_reply), msg + offset, sizeof(struct poll_reply));
-    break;
-  }
-
-  case FILE_REQ:
-  {
-    memcpy(&(msg_obj->payload.file_req), msg + offset, sizeof(struct file_req));
-    break;
-  }
-
-  case FILE_LIST_MULTICAST:
-  {
-    memcpy(&(msg_obj->payload.file_list_multicast), msg + offset, sizeof(struct file_list_multicast));
-    break;
-  }
-
-  default:
-    perror("Message type not recognized.");
-    return NULL;
-    break;
-  }
-
-  return msg_obj;
-}
-
 int joinMulticastGroup(struct multicast_group *grp, struct multicast_group_list *mc_list)
 {
   struct ip_mreq mreq;
@@ -721,30 +575,24 @@ int findGroupSend(struct message *msg)
   baddr.sin_addr.s_addr = htonl(INADDR_BROADCAST); /* Broadcast IP address */
   baddr.sin_port = htons(BROADCAST_REQ_PORT);      /* Broadcast port */
 
-  int buff_len;
-  char *buff = serialize(msg, &buff_len);
-  if (buff == NULL)
+  if (sendto(fd, msg, sizeof(struct message), 0, (struct sockaddr *)&baddr, (socklen_t)sizeof(baddr)) == -1)
   {
-    perror("serialize()");
-    return -1;
-  }
-
-  if (sendto(fd, buff, buff_len, 0, (struct sockaddr *)&baddr, (socklen_t)sizeof(baddr)) == -1)
-  {
-    free(buff);
     perror("sendto()");
     return -1;
   }
 
-  free(buff);
   close(fd);
   return 0;
 }
 
 struct message *findGroupRecv(int recv_fd, char *grp_name)
 {
-  char buff[PACKET_SIZE];
-  struct message *recv_msg = NULL;
+  struct message *recv_msg = calloc(1, sizeof(struct message));
+  if (recv_msg == NULL)
+  {
+    perror("[findGroupRecv] calloc");
+    return NULL;
+  }
 
   printf("\n>> Finding group, please wait for about %d seconds...\n\n", FIND_GROUP_TIMEOUT);
 
@@ -775,9 +623,7 @@ struct message *findGroupRecv(int recv_fd, char *grp_name)
       struct sockaddr_in caddr;
       int len = sizeof(caddr);
 
-      int n = recvfrom(recv_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
-
-      recv_msg = deserialize(buff);
+      int n = recvfrom(recv_fd, recv_msg, sizeof(struct message), 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
 
       /* ensure that this is a reply for FIND_GROUP and the group name is same */
       if (recv_msg->msg_type != FIND_GROUP_REPLY || strcmp(recv_msg->payload.find_grp_reply.grp_name, grp_name) != 0)
@@ -806,23 +652,12 @@ int handleFindGroupReq(struct message *parsed_msg, struct multicast_group_list *
     strcpy(msg_reply.payload.find_grp_reply.ip, grp->ip);
     msg_reply.payload.find_grp_reply.port = grp->port;
 
-    int reply_len;
-    char *reply_buff = serialize(&msg_reply, &reply_len);
-
-    if (reply_buff == NULL)
-    {
-      perror("serialize()");
-      return -1;
-    }
-
     /* send group info */
     int clen = sizeof(caddr);
     caddr.sin_port = htons(parsed_msg->payload.find_grp_req.reply_port);
 
     /* ignore sendto() error */
-    sendto(broadcast_fd, reply_buff, reply_len, 0, (struct sockaddr *)&caddr, (socklen_t)clen);
-
-    free(reply_buff);
+    sendto(broadcast_fd, &msg_reply, sizeof(msg_reply), 0, (struct sockaddr *)&caddr, (socklen_t)clen);
   }
 
   return 0;
@@ -834,17 +669,8 @@ int sendSimpleMessage(struct multicast_group *grp, char *msg)
   pkt.msg_type = SIMPLE_MSG;
   strcpy(pkt.payload.simple_msg.msg, msg);
 
-  int buff_len;
-  char *buff = serialize(&pkt, &buff_len);
-  if (buff == NULL)
-  {
-    perror("serialize()");
-    return -1;
-  }
+  int res = sendto(grp->send_fd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr));
 
-  int res = sendto(grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr));
-
-  free(buff);
   return res;
 }
 
@@ -891,20 +717,11 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
   pkt.msg_type = POLL_REQ;
   pkt.payload.poll_req = poll_req;
 
-  int buff_len;
-  char *buff = serialize(&pkt, &buff_len);
-  if (buff == NULL)
-  {
-    perror("serialize()");
-    return -1;
-  }
-
   /* Send poll message to group */
-  if (sendto(grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr)) == -1)
+  if (sendto(grp->send_fd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&(grp->send_addr), (socklen_t)sizeof(grp->send_addr)) == -1)
   {
     close(reply_fd);
     perror("sendto()");
-    free(buff);
     return -1;
   }
 
@@ -930,7 +747,6 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
       int nready = select(reply_fd + 1, &monitor_fd, NULL, NULL, &tv);
       if (nready == -1)
       {
-        free(buff);
         return -1;
       }
       if (nready == 0)
@@ -943,26 +759,21 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
       {
         struct sockaddr_in caddr;
         int len = sizeof(caddr);
-        memset(buff, '\0', PACKET_SIZE);
+        struct message recv_msg;
 
-        int n = recvfrom(reply_fd, buff, PACKET_SIZE, 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
-
-        struct message *recv_msg = deserialize(buff);
+        int n = recvfrom(reply_fd, &recv_msg, sizeof(recv_msg), 0, (struct sockaddr *)&caddr, (socklen_t *)&len);
 
         /* ensure that this is a reply for FIND_GROUP */
-        if (recv_msg->msg_type != POLL_REPLY || recv_msg->payload.poll_reply.id != poll_req.id)
+        if (recv_msg.msg_type != POLL_REPLY || recv_msg.payload.poll_reply.id != poll_req.id)
         {
-          free(recv_msg);
           continue;
         }
         else
         {
-          int selected_opt_idx = recv_msg->payload.poll_reply.option;
+          int selected_opt_idx = recv_msg.payload.poll_reply.option;
           printf(">> %s:%d selected option %d. Waiting %ds for other replies...\n", inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port), selected_opt_idx + 1, POLL_TIMEOUT);
           option_cnt[selected_opt_idx] += 1;
         }
-
-        free(recv_msg);
       }
     }
 
@@ -972,14 +783,12 @@ int handlePollCommand(struct multicast_group *grp, struct poll_req poll_req)
       printf(">> Option %d -> %d\n", i + 1, option_cnt[i]);
     }
     printf("\n");
-    free(buff);
 
     close(reply_fd);
     exit(EXIT_SUCCESS);
   }
 
   close(reply_fd);
-  free(buff);
   return 0;
 }
 
@@ -1185,14 +994,10 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
   strcpy(msg.payload.file_req.file_name, file_name);
   msg.payload.file_req.port = ntohs(saddr.sin_port);
 
-  int buff_len;
-  char *buff = serialize(&msg, &buff_len);
-
   /* child listens for TCP requests */
   if (fork() == 0)
   {
     signal(SIGALRM, SIG_IGN);
-    free(buff);
 
     struct sockaddr_in caddr;
     int clen = sizeof(caddr);
@@ -1274,11 +1079,9 @@ int requestFileCmdHandler(char *file_name, char my_files[][FILE_NAME_LEN], int *
 
     while (curr_grp)
     {
-      sendto(curr_grp->send_fd, buff, buff_len, 0, (struct sockaddr *)&(curr_grp->send_addr), (socklen_t)sizeof(struct sockaddr_in));
+      sendto(curr_grp->send_fd, &msg, sizeof(msg), 0, (struct sockaddr *)&(curr_grp->send_addr), (socklen_t)sizeof(struct sockaddr_in));
       curr_grp = curr_grp->next;
     }
-
-    free(buff);
 
     int status;
     wait(&status);

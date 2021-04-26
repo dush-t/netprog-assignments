@@ -19,7 +19,6 @@
 #define NUM_OPTIONS 5
 #define COMMAND_LEN 1024
 #define MAX_GROUPS 20
-#define PACKET_SIZE 1024
 #define FIND_GROUP_TIMEOUT 5
 #define POLL_TIMEOUT 10
 #define FILE_NAME_LEN 20
@@ -230,10 +229,6 @@ int removeMulticastGroup(struct multicast_group_list *list, struct multicast_gro
 int listGroups(struct multicast_group_list *list);
 
 int max(int num1, int num2);
-
-char *serialize(struct message *, int *);
-
-struct message *deserialize(char *);
 
 int joinMulticastGroup(struct multicast_group *, struct multicast_group_list *);
 
