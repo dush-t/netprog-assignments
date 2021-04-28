@@ -278,6 +278,7 @@ int procV4(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
   else
   {
     /* Received some other reply, ignore message */
+    proto->rtt[proto->nsent - 1] = -1;
     return -2;
   }
   return 0;
@@ -362,6 +363,7 @@ int procV6(char *ptr, ssize_t len, struct proto *proto, struct timeval *tvrecv)
   else
   {
     /* Received some other reply, ignore message */
+    proto->rtt[proto->nsent - 1] = -1;
     return -2;
   }
 

@@ -253,8 +253,6 @@ void *ip4RecvHelper(void *args)
       int proc_res;
       if ((proc_res = (proto->fproc)(buff, n, proto, &tv)) == -1)
         cleanupAndExit("procV4()");
-      else if (proc_res == -2)
-        continue;
 
       if (proto->nsent < 3)
       {
@@ -342,8 +340,6 @@ void *ip6RecvHelper(void *args)
       int proc_res;
       if ((proc_res = (proto->fproc)(buff, n, proto, &tv)) == -1)
         cleanupAndExit("procV6()");
-      else if (proc_res == -2)
-        continue;
 
       if (proto->nsent < 3)
       {
