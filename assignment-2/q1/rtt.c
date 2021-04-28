@@ -463,14 +463,37 @@ void printRtts()
     if (getIpAddrFromProto(proto, ipaddr) == -1)
       cleanupAndExit("getIpAddrFromProto");
 
-    printf("%s: %.2fms %.2fms %.2fms\n", ipaddr, proto->rtt[0], proto->rtt[1], proto->rtt[2]);
+    printf("%s:", ipaddr);
 
     if (proto->rtt[0] == -1)
+    {
+      printf(" *");
       loss_count++;
+    }
+    else
+    {
+      printf(" %.2fms", proto->rtt[0]);
+    }
     if (proto->rtt[1] == -1)
+    {
+      printf(" *");
       loss_count++;
+    }
+    else
+    {
+      printf(" %.2fms", proto->rtt[1]);
+    }
     if (proto->rtt[2] == -1)
+    {
+      printf(" *");
       loss_count++;
+    }
+    else
+    {
+      printf(" %.2fms", proto->rtt[2]);
+    }
+
+    printf("\n");
   }
   printf("\n==== END RTTs ====\n");
 }
