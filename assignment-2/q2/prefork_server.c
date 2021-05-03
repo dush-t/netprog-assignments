@@ -14,9 +14,12 @@
 #include <arpa/inet.h>
 
 
-#define PORT 9002
+#define PORT 9090
+#define MAX_WORKERS 128
 #define REQ_SIZE 2048
-#define MAX_WORKERS 1024
+#define RES_SIZE 16
+#define HTTP_RESPONSE "HTTP/1.1 200 OK"
+#define SOCK_PATH "preforkserver1.sock\0"
 
 #define GOT_REQUEST 1
 #define COMPLETED_REQUEST 2
@@ -34,6 +37,8 @@ typedef struct Workers {
     short is_idle;
     short to_harvest;
     int socket;
+    struct Workers* next;
+    struct Workers* prev;
 } Worker;
 
 
@@ -43,10 +48,13 @@ int num_idle_workers = 0;
 int num_workers = 0;
 int is_worker = 0;
 
-Worker* workers[MAX_WORKERS];
 struct sockaddr_un server_addr;
 
+// Head of LinkedList of workers
+Worker* head = NULL;
 
+
+// Helper func to get socket address by pid
 struct sockaddr_un
 get_worker_sock_addr(pid_t pid) {
     struct sockaddr_un addr;
@@ -60,35 +68,44 @@ get_worker_sock_addr(pid_t pid) {
     return addr;
 }
 
+// Helper function to get worker by id
 Worker* 
 get_worker_by_id(pid_t pid) {
-    for (int i = 0; i < num_workers; i++) {
-        if (workers[i]->pid == pid) {
-            return workers[i];
+    Worker* curr = head;
+    while (curr != NULL) {
+        if (curr->pid == pid) {
+            return curr;
         }
+        curr = curr->next;
     }
-
     return NULL;
 }
 
-Worker* 
-remove_worker(pid_t pid) {
-    for (int i = 0; i < num_workers; i++) {
-        Worker* w = workers[i];
-        if (w->pid == pid) {
-            workers[i] = NULL;
-            num_workers--;
-            num_idle_workers--;
-            kill(w->pid, SIGKILL);
-            waitpid(w->pid, NULL, WUNTRACED);
+// Kill a worker process and remove it from list
+void
+remove_worker(Worker* wk) {
+    if (wk == NULL) return;
 
-            return w;
+    num_workers--; num_idle_workers--;
+    kill(wk->pid, SIGKILL);
+    waitpid(wk->pid, NULL, WUNTRACED);
+
+    if (wk->pid == head->pid) {
+        head = wk->next;
+        head->prev = NULL;
+    }
+    else {
+        wk->prev->next = wk->next;
+        if (wk->next != NULL) {
+            wk->next->prev = wk->prev;
         }
     }
+    
+    free(wk);
 
-    return NULL;
 }
 
+// Add worker entry to list
 Worker*
 add_worker(pid_t pid) {
     Worker* wk = (Worker*)malloc(sizeof(Worker));
@@ -96,52 +113,49 @@ add_worker(pid_t pid) {
     wk->pid = pid;
     wk->reqs_handled = 0;
     wk->to_harvest = 0;
+    wk->prev = NULL; wk->next = NULL;
 
-    wk->socket = socket(AF_UNIX, SOCK_DGRAM, 0);
-
-    int inserted = 0;
-    for (int i = 0; i < num_workers; i++) {
-        if (workers[i] == NULL) {
-            workers[i] = wk;
-            inserted = 1;
-            break;
-        }
+    num_idle_workers++; num_workers++;
+    if (head == NULL) {
+        head = wk;
+        return wk;
     }
 
-    if (!inserted) {
-        workers[num_workers] = wk;
-    }
+    wk->next = head;
+    head->prev = wk;
 
-    num_workers++;
-    num_idle_workers++;
-
+    head = wk;
     return wk;
 }
 
+// Print worker stats
 void
 print_worker_stats() {
     printf("\n%d worker processes are running, %d are idle\n", num_workers, num_idle_workers);
-    for (int i = 0; i < num_workers; i++) {
-        Worker* wk = workers[i];
+    Worker* wk = head;
+    while (wk != NULL) {
         printf("Worker pid = %d | clients_handled = %d | active = %d\n", wk->pid, wk->reqs_handled, !wk->is_idle);
+        wk = wk->next;
     }
 }
 
+// Kill all children and then exit.
 void
 sigquit_handler(int signum) {
     if (!is_worker) {
-        printf("Got SIGQUIT\nKilling all children\n");
-        for (int i = 0; i < num_workers; i++) {
-            Worker* wk = workers[i];
-            kill(wk->pid, SIGKILL);
-            waitpid(wk->pid, NULL, WUNTRACED);
-            printf("Worker %d: killed\n", wk->pid);
-        }
-        printf("Children killed. Exiting now.\n");
+        unlink(SOCK_PATH);
+        printf("Unlinked local socket.\nClosing TCP socket...\n");
+        close(sock);
+        printf("TCP socket closed.\n");
+        exit(0);
+    }
+    else {
+        printf("Child %d exited.\n", getpid());
         exit(0);
     }
 }
 
+// Print worker stats on SIGINT
 void
 sigint_handler(int signum) {
     if (!is_worker) {
@@ -149,7 +163,7 @@ sigint_handler(int signum) {
     }
 }
 
-
+// The code run inside worker processes.
 int
 start_worker() {
     pid_t pid = getpid();
@@ -178,7 +192,6 @@ start_worker() {
         }
         init = 1;
 
-        printf("worker %d ready to accept requests\n", pid);
         // Wait for a request to arrive
         struct sockaddr_in caddr;
         int addr_len = sizeof(caddr);
@@ -188,12 +201,12 @@ start_worker() {
             return -1;
         }
 
+        
         // Send GOT_REQUEST message, and then serve the request
         ControlMsg cmsg;
         cmsg.pid = pid;
         cmsg.reqs_handled = reqs_handled;
         cmsg.type = GOT_REQUEST;
-        // printf("server_addr = %s\n", &(server_addr.sun_path[1]));
         if (sendto(localsock, (char*)&cmsg, sizeof(cmsg), 0, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
             perror("worker got request sendto");
             return -1;
@@ -201,10 +214,15 @@ start_worker() {
 
         printf("Child [PID = %d]: Accepted connection from %s:%d\n",
                 pid, inet_ntoa(caddr.sin_addr), ntohs(caddr.sin_port));
+        
+        char req[REQ_SIZE];
+        if (recv(csock, req, REQ_SIZE, 0) < 0) {
+            perror("worker tcp recv");
+            return -1;
+        }
 
-        char reply[32];
-        sprintf(reply, "Worker %d says OK", pid);
-        if (send(csock, reply, sizeof(reply), 0) < 0) {
+        char res[RES_SIZE] = HTTP_RESPONSE;
+        if (send(csock, res, RES_SIZE, 0) < 0) {
             perror("worker tcp send");
             return -1;
         }
@@ -221,12 +239,11 @@ start_worker() {
     }
 }
 
-
+// Spawn a new worker and add it to list
 void 
 create_new_worker() {
     pid_t pid = fork();
     if (pid == 0) {
-        printf("Started new worker with pid %d\n", getpid());
         is_worker = 1;
         int status = start_worker();
         exit(status);
@@ -237,7 +254,7 @@ create_new_worker() {
 }
 
 
-
+// Spawn workers exponentially
 void
 exponential_spawn(int n) {
     if (n > 32) n = 32;
@@ -245,13 +262,15 @@ exponential_spawn(int n) {
         create_new_worker();    
     }
 
-    if (num_idle_workers > minSpareServers) {
+    if (num_idle_workers >= minSpareServers) {
         return;
     }
 
     exponential_spawn(n * 2);
 }
 
+// This function handles messages received from workers
+// for collecting worker stats and synchronization.
 void
 handle_control_msg(ControlMsg* cmsg) {
     switch (cmsg->type) {
@@ -270,10 +289,11 @@ handle_control_msg(ControlMsg* cmsg) {
             wk->reqs_handled = cmsg->reqs_handled;
             num_idle_workers++;
             if (num_idle_workers > maxSpareServers) {
-                remove_worker(wk->pid);
+                remove_worker(wk);
             }
             else if (cmsg->reqs_handled == maxRequestsPerChild) {
-                remove_worker(wk->pid);
+                remove_worker(wk);
+
                 create_new_worker();
             }
             else {
@@ -303,6 +323,11 @@ main(int argc, char* argv[]) {
         exit(-1);
     }
 
+    printf("\nTo test with ab, run: ab -n 10000 -c 10 http://127.0.0.1:%d/\n", PORT);
+    printf("To stop server, press Ctrl+\\\n");
+
+    printf("--------------------------------------------------\n\n");
+
     signal(SIGQUIT, sigquit_handler);
     signal(SIGINT, sigint_handler);
 
@@ -329,7 +354,8 @@ main(int argc, char* argv[]) {
     lsock = socket(AF_UNIX, SOCK_DGRAM, 0);
     server_addr.sun_family = AF_UNIX;
     bzero(server_addr.sun_path, 108);
-    strcpy(&(server_addr.sun_path[1]), "preforkserver");
+    strcpy(server_addr.sun_path, SOCK_PATH);
+    unlink(server_addr.sun_path);
     if (bind(lsock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("lbind");
         exit(-1);
